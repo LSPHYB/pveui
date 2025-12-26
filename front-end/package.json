@@ -9,7 +9,7 @@
   "dependencies": {
     "@logicflow/core": "^2.1.4",
     "@logicflow/extension": "^2.1.6",
-    "@novnc/novnc": "^1.4.0",
+    "@novnc/novnc": "1.4.0",
     "@wangeditor/editor": "^5.1.23",
     "@wangeditor/editor-for-vue": "^5.1.12",
     "axios": "^1.12.2",
