@@ -3,7 +3,7 @@
     <div class="side-left">
       <div style="height: 38px"><img src="@/assets/icon.svg" /></div>
 
-      <h5 class="arco-typography brand">pve-ui</h5>
+      <h5 class="arco-typography brand">教学实训平台</h5>
     </div>
 
     <ul class="side-right">
