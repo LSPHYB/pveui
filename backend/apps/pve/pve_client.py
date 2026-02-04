@@ -187,6 +187,38 @@ class PVEAPIClient:
         """获取LXC容器配置。"""
         return self._request('GET', f'/nodes/{node}/lxc/{vmid}/config')
     
+    def get_vm_rrd(
+        self,
+        node: str,
+        vmid: int,
+        timeframe: str = 'hour',
+        cf: str = 'AVERAGE'
+    ) -> List[Dict]:
+        """
+        获取虚拟机的RRD监控数据。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            timeframe: 时间范围（hour、day、week、month、year）
+            cf: 聚合方式（AVERAGE、MAX、MIN）
+            
+        Returns:
+            RRD数据列表
+        """
+        params = {
+            'timeframe': timeframe or 'hour'
+        }
+        if cf:
+            params['cf'] = cf
+        result = self._request('GET', f'/nodes/{node}/qemu/{vmid}/rrddata', params=params)
+        if isinstance(result, list):
+            return result
+        elif isinstance(result, dict):
+            return [result]
+        return []
+
+    
     def create_vnc_proxy(self, node: str, vmid: int, websocket: bool = True, generate_password: bool = True) -> Dict:
         """
         创建VNC代理会话，用于noVNC连接。
@@ -531,5 +563,10 @@ class PVEAPIClient:
         if isinstance(result, list):
             # PVE 返回格式：[{"n": 行号, "t": "日志内容"}, ...]
             return [item.get('t', '') for item in result if isinstance(item, dict)]
-        return []
+
+    def get_resource_config(self, node: str, type: str, vmid: str) -> Dict:
+        """获取资源(VM/LXC)配置。"""
+        if type not in ['qemu', 'lxc']:
+           raise ValueError(f"Unknown resource type: {type}")
+        return self._request('GET', f'/nodes/{node}/{type}/{vmid}/config')
 

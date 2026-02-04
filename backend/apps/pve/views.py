@@ -15,6 +15,7 @@ from django.db import transaction
 
 from apps.common.viewsets import ActionSerializerMixin
 from apps.common.mixins import AuditOwnerPopulateMixin
+from apps.common.data_mixins import DataScopeFilterMixin
 from django.core.cache import cache
 from django.conf import settings
 from django.http import HttpResponseBadRequest, HttpResponseNotFound, FileResponse, Http404
@@ -55,7 +56,7 @@ PVE_CONSOLE_SESSION_TTL = getattr(settings, 'PVE_CONSOLE_SESSION_TTL', 60)
 NOVNC_ASSETS_DIR = Path(__file__).resolve().parents[2] / 'templates' / 'novnc-pve'
 
 
-class PVEServerViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
+class PVEServerViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
     """PVE服务器CRUD视图集。"""
     
     queryset = PVEServer.objects.all().order_by('name')
@@ -258,6 +259,52 @@ class PVEServerViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.
             return Response({
                 'detail': f'获取网络接口失败: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'], url_path='nodes/(?P<node>[^/.]+)/qemu')
+    def node_qemu(self, request, pk=None, node=None):
+        """获取节点QEMU虚拟机列表。"""
+        server = self.get_object()
+        try:
+            client = PVEAPIClient(
+                host=server.host, port=server.port,
+                token_id=server.token_id, token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            vms = client.get_vms(node) # Reusing get_vms which fetches qemu
+            return Response(vms)
+        except Exception as e:
+             return Response({'detail': f'获取VM列表失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'], url_path='nodes/(?P<node>[^/.]+)/lxc')
+    def node_lxc(self, request, pk=None, node=None):
+        """获取节点LXC容器列表。"""
+        server = self.get_object()
+        try:
+            client = PVEAPIClient(
+                host=server.host, port=server.port,
+                token_id=server.token_id, token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            # Assuming client has get_lxcs or we use generic get
+            lxcs = client.get_lxc_containers(node)
+            return Response(lxcs)
+        except Exception as e:
+             return Response({'detail': f'获取LXC列表失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'], url_path='nodes/(?P<node>[^/.]+)/(?P<type>qemu|lxc)/(?P<vmid>[^/.]+)/config')
+    def node_resource_config(self, request, pk=None, node=None, type=None, vmid=None):
+        """获取资源(VM/LXC)配置。"""
+        server = self.get_object()
+        try:
+            client = PVEAPIClient(
+                host=server.host, port=server.port,
+                token_id=server.token_id, token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            config = client.get_resource_config(node, type, vmid)
+            return Response(config)
+        except Exception as e:
+             return Response({'detail': f'获取配置失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=False, methods=['get'], url_path='global-tasks')
     def global_tasks(self, request):
@@ -599,7 +646,7 @@ class PVEServerViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.
         return alerts
 
 
-class VirtualMachineViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
+class VirtualMachineViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
     """虚拟机CRUD视图集。"""
     
     queryset = VirtualMachine.objects.all().order_by('-created_at')
@@ -848,6 +895,91 @@ class VirtualMachineViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, view
             logger.exception('更新虚拟机硬件配置失败')
             return Response({
                 'detail': f'更新虚拟机硬件配置失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['get'], url_path='status/current')
+    def status_current(self, request, pk=None):
+        """获取虚拟机实时状态信息。"""
+        vm = self.get_object()
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            status_info = client.get_vm_status(vm.node, vm.vmid)
+            return Response(status_info)
+        except Exception as e:
+            logger.exception('获取虚拟机状态失败')
+            return Response({
+                'detail': f'获取虚拟机状态失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['get'])
+    def rrddata(self, request, pk=None):
+        """获取虚拟机RRD监控数据。"""
+        vm = self.get_object()
+        timeframe = request.query_params.get('timeframe', 'hour')
+        cf = 'AVERAGE'
+        
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            rrd_data = client.get_vm_rrd(vm.node, vm.vmid, timeframe=timeframe, cf=cf)
+            return Response(rrd_data if isinstance(rrd_data, list) else [])
+        except Exception as e:
+            logger.exception('获取RRD数据失败')
+            return Response({
+                'detail': f'获取RRD数据失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['get', 'put'])
+    def config(self, request, pk=None):
+        """获取或更新虚拟机配置。"""
+        vm = self.get_object()
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            if request.method.upper() == 'GET':
+                config = client.get_vm_config(vm.node, vm.vmid)
+                vm.pve_config = config
+                vm.save(update_fields=['pve_config'])
+                return Response({'config': config})
+            else:  # PUT
+                params = request.data.get('params', {})
+                if not params:
+                    return Response({
+                        'detail': '缺少需要更新的配置参数'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                result = client.update_vm_config(vm.node, vm.vmid, params)
+                config = client.get_vm_config(vm.node, vm.vmid)
+                vm.pve_config = config
+                vm.save(update_fields=['pve_config'])
+                return Response({
+                    'success': True,
+                    'message': '配置更新已提交',
+                    'upid': result,
+                    'config': config
+                })
+        except Exception as e:
+            logger.exception('处理虚拟机配置请求失败')
+            return Response({
+                'detail': f'处理虚拟机配置请求失败: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['get', 'post'])
@@ -1525,7 +1657,7 @@ class VirtualMachineViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, view
             }, status=status.HTTP_400_BAD_REQUEST)
 
 
-class LXCContainerViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
+class LXCContainerViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
     """LXC容器管理视图集。"""
     
     queryset = LXCContainer.objects.all().order_by('-created_at')
@@ -1763,7 +1895,7 @@ class LXCContainerViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewse
         return Response(summary)
 
 
-class NetworkTopologyViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
+class NetworkTopologyViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
     """网络拓扑视图集：管理 LogicFlow 拓扑图。"""
 
     serializer_class = NetworkTopologyDetailSerializer
