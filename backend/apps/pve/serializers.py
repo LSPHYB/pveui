@@ -171,6 +171,38 @@ class VMBackupCreateSerializer(serializers.Serializer):
     notes = serializers.CharField(required=False, allow_blank=True, help_text='备份备注')
 
 
+class VMBackupRestoreSerializer(serializers.Serializer):
+    """还原虚拟机备份序列化器。"""
+    
+    storage = serializers.CharField(help_text='存储位置')
+    archive = serializers.CharField(help_text='备份文件路径/volid')
+    force = serializers.BooleanField(default=False, required=False, help_text='是否强制覆盖')
+    unique = serializers.BooleanField(default=False, required=False, help_text='是否生成新的VM ID')
+
+
+class VMBackupDeleteSerializer(serializers.Serializer):
+    """删除虚拟机备份序列化器。"""
+    
+    storage = serializers.CharField(help_text='存储名称')
+    volid = serializers.CharField(help_text='卷ID/备份文件路径')
+
+
+class VMBackupNotesSerializer(serializers.Serializer):
+    """更新备份备注序列化器。"""
+    
+    storage = serializers.CharField(help_text='存储名称')
+    volid = serializers.CharField(help_text='卷ID/备份文件路径')
+    notes = serializers.CharField(required=False, allow_blank=True, help_text='备份备注')
+
+
+class VMBackupProtectionSerializer(serializers.Serializer):
+    """更新备份保护状态序列化器。"""
+    
+    storage = serializers.CharField(help_text='存储名称')
+    volid = serializers.CharField(help_text='卷ID/备份文件路径')
+    protected = serializers.BooleanField(help_text='是否保护')
+
+
 class VMSnapshotCreateSerializer(serializers.Serializer):
     """创建虚拟机快照序列化器。"""
     
@@ -183,6 +215,13 @@ class VMSnapshotActionSerializer(serializers.Serializer):
     """快照操作序列化器（删除/回滚）。"""
     
     name = serializers.CharField(max_length=64, help_text='快照名称')
+
+
+class VMSnapshotUpdateSerializer(serializers.Serializer):
+    """快照更新序列化器（编辑备注）。"""
+    
+    name = serializers.CharField(max_length=64, help_text='快照名称')
+    description = serializers.CharField(required=False, allow_blank=True, help_text='快照描述')
 
 
 class VMCloneSerializer(serializers.Serializer):

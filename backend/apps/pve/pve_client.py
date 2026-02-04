@@ -570,3 +570,203 @@ class PVEAPIClient:
            raise ValueError(f"Unknown resource type: {type}")
         return self._request('GET', f'/nodes/{node}/{type}/{vmid}/config')
 
+    # ==================== 快照管理 ====================
+    
+    def list_snapshots(self, node: str, vmid: int) -> List[Dict]:
+        """
+        获取虚拟机快照列表。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            
+        Returns:
+            快照列表
+        """
+        result = self._request('GET', f'/nodes/{node}/qemu/{vmid}/snapshot')
+        return result if isinstance(result, list) else [result] if result else []
+    
+    def get_snapshot_config(self, node: str, vmid: int, snapname: str) -> Dict:
+        """
+        获取快照配置信息。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            snapname: 快照名称
+            
+        Returns:
+            快照配置
+        """
+        return self._request('GET', f'/nodes/{node}/qemu/{vmid}/snapshot/{snapname}/config')
+    
+    def create_snapshot(self, node: str, vmid: int, name: str, 
+                       description: str = '', include_memory: bool = False) -> str:
+        """
+        创建虚拟机快照。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            name: 快照名称
+            description: 快照描述
+            include_memory: 是否包含内存状态
+            
+        Returns:
+            任务UPID
+        """
+        data = {
+            'snapname': name,
+            'description': description,
+        }
+        if include_memory:
+            data['vmstate'] = 1
+        
+        return self._request('POST', f'/nodes/{node}/qemu/{vmid}/snapshot', data=data)
+    
+    def update_snapshot(self, node: str, vmid: int, snapname: str, description: str) -> None:
+        """
+        更新快照描述/备注。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            snapname: 快照名称
+            description: 新的描述
+        """
+        data = {'description': description}
+        return self._request('PUT', f'/nodes/{node}/qemu/{vmid}/snapshot/{snapname}/config', data=data)
+    
+    def rollback_snapshot(self, node: str, vmid: int, snapname: str) -> str:
+        """
+        回滚到指定快照。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            snapname: 快照名称
+            
+        Returns:
+            任务UPID
+        """
+        return self._request('POST', f'/nodes/{node}/qemu/{vmid}/snapshot/{snapname}/rollback')
+    
+    def delete_snapshot(self, node: str, vmid: int, snapname: str, force: bool = False) -> str:
+        """
+        删除快照。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            snapname: 快照名称
+            force: 是否强制删除
+            
+        Returns:
+            任务UPID
+        """
+        params = {}
+        if force:
+            params['force'] = 1
+        
+        return self._request('DELETE', f'/nodes/{node}/qemu/{vmid}/snapshot/{snapname}', params=params)
+    
+    # ==================== 备份管理 ====================
+    
+    def create_backup(self, node: str, vmid: int, storage: str, 
+                     mode: str = 'snapshot', compress: str = 'zstd',
+                     remove: bool = False, notes: str = '') -> str:
+        """
+        创建虚拟机备份。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            storage: 存储位置
+            mode: 备份模式 (snapshot/suspend/stop)
+            compress: 压缩算法 (zstd/lzo/gzip/0)
+            remove: 是否在备份后删除
+            notes: 备份备注
+            
+        Returns:
+            任务UPID
+        """
+        data = {
+            'vmid': vmid,
+            'storage': storage,
+            'mode': mode,
+            'compress': compress,
+        }
+        if remove:
+            data['remove'] = 1
+        if notes:
+            data['notes-template'] = notes
+            
+        return self._request('POST', f'/nodes/{node}/vzdump', data=data)
+    
+    def delete_backup(self, node: str, storage: str, volid: str) -> str:
+        """
+        删除备份文件。
+        
+        Args:
+            node: 节点名称
+            storage: 存储名称
+            volid: 卷ID
+            
+        Returns:
+            任务UPID
+        """
+        return self._request('DELETE', f'/nodes/{node}/storage/{storage}/content/{volid}')
+    
+    def update_backup_notes(self, node: str, storage: str, volid: str, notes: str) -> None:
+        """
+        更新备份备注。
+        
+        Args:
+            node: 节点名称
+            storage: 存储名称
+            volid: 卷ID
+            notes: 备注内容
+        """
+        data = {'notes': notes}
+        return self._request('PUT', f'/nodes/{node}/storage/{storage}/content/{volid}', data=data)
+    
+    def update_backup_protection(self, node: str, storage: str, volid: str, protected: bool) -> None:
+        """
+        更新备份保护状态。
+        
+        Args:
+            node: 节点名称
+            storage: 存储名称
+            volid: 卷ID
+            protected: 是否保护
+        """
+        data = {'protected': 1 if protected else 0}
+        return self._request('PUT', f'/nodes/{node}/storage/{storage}/content/{volid}', data=data)
+    
+    def restore_backup(self, node: str, vmid: int, storage: str, archive: str, 
+                      force: bool = False, unique: bool = False) -> str:
+        """
+        还原备份。
+        
+        Args:
+            node: 节点名称
+            vmid: 目标虚拟机ID
+            storage: 存储位置
+            archive: 备份文件路径
+            force: 是否强制覆盖
+            unique: 是否使用唯一ID
+            
+        Returns:
+            任务UPID
+        """
+        data = {
+            'vmid': vmid,
+            'archive': archive,
+            'storage': storage,
+        }
+        if force:
+            data['force'] = 1
+        if unique:
+            data['unique'] = 1
+            
+        return self._request('POST', f'/nodes/{node}/qemu', data=data)

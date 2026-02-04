@@ -38,8 +38,13 @@ from .serializers import (
     VirtualMachineHardwareUpdateSerializer,
     VMOptionsUpdateSerializer,
     VMBackupCreateSerializer,
+    VMBackupRestoreSerializer,
+    VMBackupDeleteSerializer,
+    VMBackupNotesSerializer,
+    VMBackupProtectionSerializer,
     VMSnapshotCreateSerializer,
     VMSnapshotActionSerializer,
+    VMSnapshotUpdateSerializer,
     VMCloneSerializer,
     NetworkTopologyListSerializer,
     NetworkTopologyDetailSerializer,
@@ -1250,6 +1255,139 @@ class VirtualMachineViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, Actio
                 'detail': f'创建备份失败: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(detail=True, methods=['post'])
+    def restore_backup(self, request, pk=None):
+        """还原备份到虚拟机。"""
+        vm = self.get_object()
+        serializer = VMBackupRestoreSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            # 还原备份
+            result = client.restore_backup(
+                vm.node,
+                vm.vmid,
+                data['storage'],
+                data['archive'],
+                force=data.get('force', False),
+                unique=data.get('unique', False)
+            )
+            return Response({
+                'success': True,
+                'upid': result,
+                'message': '备份还原任务已提交'
+            })
+        except Exception as e:
+            logger.exception('还原备份失败')
+            return Response({
+                'detail': f'还原备份失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def delete_backup(self, request, pk=None):
+        """删除备份文件。"""
+        vm = self.get_object()
+        serializer = VMBackupDeleteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            # 删除备份
+            result = client.delete_backup(
+                vm.node,
+                data['storage'],
+                data['volid']
+            )
+            return Response({
+                'success': True,
+                'upid': result,
+                'message': '备份已删除'
+            })
+        except Exception as e:
+            logger.exception('删除备份失败')
+            return Response({
+                'detail': f'删除备份失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def update_backup_notes(self, request, pk=None):
+        """更新备份备注。"""
+        vm = self.get_object()
+        serializer = VMBackupNotesSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            client.update_backup_notes(
+                vm.node,
+                data['storage'],
+                data['volid'],
+                data['notes']
+            )
+            return Response({
+                'success': True,
+                'message': '备份备注已更新'
+            })
+        except Exception as e:
+            logger.exception('更新备份备注失败')
+            return Response({
+                'detail': f'更新备份备注失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def update_backup_protection(self, request, pk=None):
+        """更新备份保护状态。"""
+        vm = self.get_object()
+        serializer = VMBackupProtectionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            client.update_backup_protection(
+                vm.node,
+                data['storage'],
+                data['volid'],
+                data['protected']
+            )
+            return Response({
+                'success': True,
+                'message': f'备份已{"启用" if data["protected"] else "禁用"}保护'
+            })
+        except Exception as e:
+            logger.exception('更新备份保护状态失败')
+            return Response({
+                'detail': f'更新备份保护状态失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
     @action(detail=True, methods=['get'])
     def snapshots(self, request, pk=None):
         """获取虚拟机快照列表。"""
@@ -1378,6 +1516,33 @@ class VirtualMachineViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, Actio
             logger.exception('删除快照失败')
             return Response({
                 'detail': f'删除快照失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def update_snapshot(self, request, pk=None):
+        """更新快照描述/备注。"""
+        vm = self.get_object()
+        serializer = VMSnapshotUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            client.update_snapshot(vm.node, vm.vmid, data['name'], data['description'])
+            return Response({
+                'success': True,
+                'message': '快照描述已更新'
+            })
+        except Exception as e:
+            logger.exception('更新快照描述失败')
+            return Response({
+                'detail': f'更新快照描述失败: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['get'])
