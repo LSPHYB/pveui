@@ -126,8 +126,8 @@ class VirtualMachineActionSerializer(serializers.Serializer):
     """虚拟机操作序列化器。"""
     
     action = serializers.ChoiceField(
-        choices=['start', 'stop', 'shutdown', 'reboot'],
-        help_text='操作类型：start-启动, stop-停止, shutdown-关闭, reboot-重启'
+        choices=['start', 'stop', 'shutdown', 'reboot', 'suspend', 'resume', 'reset', 'hibernate'],
+        help_text='操作类型：start-启动, stop-停止, shutdown-关闭, reboot-重启, suspend-暂停, resume-恢复, reset-重置, hibernate-休眠'
     )
 
 

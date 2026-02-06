@@ -368,10 +368,49 @@ class PVEAPIClient:
         result = self._request('POST', f'/nodes/{node}/lxc/{vmid}/status/reboot')
         return result if isinstance(result, dict) else {}
     
-    def delete_vm(self, node: str, vmid: int) -> Dict:
-        """删除虚拟机。"""
-        result = self._request('DELETE', f'/nodes/{node}/qemu/{vmid}')
+    def suspend_vm(self, node: str, vmid: int) -> Dict:
+        """暂停虚拟机。"""
+        result = self._request('POST', f'/nodes/{node}/qemu/{vmid}/status/suspend')
         return result if isinstance(result, dict) else {}
+
+    def resume_vm(self, node: str, vmid: int) -> Dict:
+        """恢复虚拟机。"""
+        result = self._request('POST', f'/nodes/{node}/qemu/{vmid}/status/resume')
+        return result if isinstance(result, dict) else {}
+    
+    def reset_vm(self, node: str, vmid: int) -> Dict:
+        """重置虚拟机。"""
+        result = self._request('POST', f'/nodes/{node}/qemu/{vmid}/status/reset')
+        return result if isinstance(result, dict) else {}
+
+    def hibernate_vm(self, node: str, vmid: int) -> Dict:
+        """休眠虚拟机 (Suspend to Disk)。"""
+        # 休眠实际上是 suspend 操作加上 todisk=1 参数
+        params = {'todisk': 1}
+        result = self._request('POST', f'/nodes/{node}/qemu/{vmid}/status/suspend', params=params)
+        return result if isinstance(result, dict) else {}
+    
+    def delete_vm(self, node: str, vmid: int, purge: bool = False, destroy_status: bool = False) -> str:
+        """
+        删除虚拟机。
+        
+        Args:
+           node: 节点名称
+           vmid: 虚拟机ID
+           purge: 是否清除配置（包括磁盘）
+           destroy_status: 是否清除状态
+           
+        Returns:
+            UPID（任务ID）
+        """
+        params = {}
+        if purge:
+            params['purge'] = 1
+        if destroy_status:
+            params['destroy-status'] = 1
+            
+        result = self._request('DELETE', f'/nodes/{node}/qemu/{vmid}', params=params)
+        return result
     
     def delete_container(self, node: str, vmid: int) -> Dict:
         """删除LXC容器。"""

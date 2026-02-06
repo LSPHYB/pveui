@@ -665,6 +665,55 @@ class VirtualMachineViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, Actio
     search_fields = ['name', 'vmid', 'ip_address']
     ordering_fields = ['id', 'vmid', 'name', 'created_at']
     
+    def destroy(self, request, *args, **kwargs):
+        """删除虚拟机（同时也从PVE中删除）。"""
+        instance = self.get_object()
+        server = instance.server
+        node = instance.node
+        vmid = instance.vmid
+        
+        purge = request.query_params.get('purge', 'false').lower() == 'true'
+        
+        try:
+            # 1. 连接PVE
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            
+            # 2. 检查虚拟机状态
+            try:
+                vm_status = client.get_vm_status(node, vmid)
+                if vm_status.get('status') == 'running':
+                     return Response({
+                        'detail': '虚拟机正在运行，请先停止'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            except Exception:
+                # 如果无法获取状态，可能虚拟机已经不存在，继续尝试删除
+                pass
+
+            # 3. 调用PVE API删除
+            # purge=True 会删除关联的磁盘
+            client.delete_vm(node, vmid, purge=purge)
+            
+            # 4. 删除数据库记录
+            self.perform_destroy(instance)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+            
+        except Exception as e:
+            # 如果是404错误(虚拟机在PVE上不存在)，我们也应该允许删除数据库记录
+            if '404' in str(e) or 'does not exist' in str(e):
+                self.perform_destroy(instance)
+                return Response(status=status.HTTP_204_NO_CONTENT)
+                
+            logger.exception(f'删除虚拟机失败: {vmid}')
+            return Response({
+                'detail': f'删除虚拟机失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
     @action(detail=False, methods=['post'])
     def create_vm(self, request):
         """创建虚拟机。"""
@@ -836,6 +885,18 @@ class VirtualMachineViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, Actio
             elif action_type == 'reboot':
                 result = client.reboot_vm(vm.node, vm.vmid)
                 vm.status = 'running'
+            elif action_type == 'suspend':
+                result = client.suspend_vm(vm.node, vm.vmid)
+                vm.status = 'paused'
+            elif action_type == 'resume':
+                result = client.resume_vm(vm.node, vm.vmid)
+                vm.status = 'running'
+            elif action_type == 'reset':
+                result = client.reset_vm(vm.node, vm.vmid)
+                vm.status = 'running'
+            elif action_type == 'hibernate':
+                result = client.hibernate_vm(vm.node, vm.vmid)
+                vm.status = 'stopped' # Hibernate effectively stops the VM (saves state to disk)
             else:
                 return Response({
                     'detail': f'不支持的操作: {action_type}'
@@ -1686,7 +1747,9 @@ class VirtualMachineViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, Actio
                     return ''
             return ''
         
+
         for server in servers_qs:
+            seen_vmids = []
             try:
                 client = PVEAPIClient(
                     host=server.host,
@@ -1715,6 +1778,7 @@ class VirtualMachineViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, Actio
                     vmid = vm_info.get('vmid') or vm_info.get('vmid')
                     try:
                         vmid = int(vmid)
+                        seen_vmids.append(vmid)
                     except (TypeError, ValueError):
                         continue
                     
@@ -1773,6 +1837,11 @@ class VirtualMachineViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, Actio
                             summary['created'] += 1
                         else:
                             summary['updated'] += 1
+            
+            # 删除不存在的虚拟机
+            if seen_vmids:
+                deleted_count, _ = VirtualMachine.objects.filter(server=server).exclude(vmid__in=seen_vmids).delete()
+                # 如果有删除计数，可以记录到日志或者 summary（可选）
         
         return Response(summary)
     
