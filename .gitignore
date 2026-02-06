@@ -30,3 +30,4 @@ front-end/dist/
 # Docker local files
 *.log
 
+mysql-mcp-server/node_modules
