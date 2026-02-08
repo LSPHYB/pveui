@@ -291,6 +291,38 @@ class NetworkTopologySaveSerializer(BaseModelSerializer):
         return value
 
 
+class LXCContainerCreateSerializer(serializers.Serializer):
+    """LXC容器创建序列化器。"""
+    
+    server_id = serializers.IntegerField(help_text='PVE服务器ID')
+    node = serializers.CharField(help_text='节点名称')
+    vmid = serializers.IntegerField(help_text='容器ID（如果不提供则自动分配）', required=False, allow_null=True)
+    hostname = serializers.CharField(max_length=255, help_text='主机名')
+    password = serializers.CharField(help_text='Root密码')
+    ostemplate = serializers.CharField(help_text='操作系统模板')
+    
+    cores = serializers.IntegerField(default=1, help_text='CPU核心数', required=False)
+    memory = serializers.IntegerField(default=512, help_text='内存(MB)', required=False)
+    swap = serializers.IntegerField(default=512, help_text='交换分区(MB)', required=False)
+    
+    storage = serializers.CharField(help_text='根磁盘存储位置', default='local-lvm', required=False)
+    disk_size = serializers.IntegerField(default=8, help_text='根磁盘大小(GB)', required=False)
+    
+    network_bridge = serializers.CharField(default='vmbr0', help_text='网络桥接', required=False)
+    ip_address = serializers.CharField(default='dhcp', help_text='IP地址 (cidr | dhcp)', required=False)
+    gateway = serializers.CharField(required=False, allow_blank=True, help_text='网关')
+    
+    description = serializers.CharField(required=False, allow_blank=True, help_text='描述')
+    start_after_create = serializers.BooleanField(default=False, help_text='创建后是否启动')
+
+    def validate_server_id(self, value):
+        try:
+            PVEServer.objects.get(id=value, is_active=True)
+        except PVEServer.DoesNotExist:
+            raise serializers.ValidationError("PVE服务器不存在或未启用")
+        return value
+
+
 class LXCContainerListSerializer(BaseModelSerializer):
     """LXC容器列表序列化器。"""
     

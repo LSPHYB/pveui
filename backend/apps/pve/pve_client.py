@@ -218,6 +218,37 @@ class PVEAPIClient:
             return [result]
         return []
 
+    def get_container_rrd(
+        self,
+        node: str,
+        vmid: int,
+        timeframe: str = 'hour',
+        cf: str = 'AVERAGE'
+    ) -> List[Dict]:
+        """
+        获取LXC容器的RRD监控数据。
+        
+        Args:
+            node: 节点名称
+            vmid: 容器ID
+            timeframe: 时间范围（hour、day、week、month、year）
+            cf: 聚合方式（AVERAGE、MAX、MIN）
+            
+        Returns:
+            RRD数据列表
+        """
+        params = {
+            'timeframe': timeframe or 'hour'
+        }
+        if cf:
+            params['cf'] = cf
+        result = self._request('GET', f'/nodes/{node}/lxc/{vmid}/rrddata', params=params)
+        if isinstance(result, list):
+            return result
+        elif isinstance(result, dict):
+            return [result]
+        return []
+
     
     def create_vnc_proxy(self, node: str, vmid: int, websocket: bool = True, generate_password: bool = True) -> Dict:
         """
@@ -228,6 +259,15 @@ class PVEAPIClient:
             'generate-password': 1 if generate_password else 0
         }
         return self._request('POST', f'/nodes/{node}/qemu/{vmid}/vncproxy', params=params)
+
+    def create_lxc_vnc_proxy(self, node: str, vmid: int, websocket: bool = True) -> Dict:
+        """
+        创建LXC VNC代理会话，用于noVNC连接。
+        """
+        params = {
+            'websocket': 1 if websocket else 0,
+        }
+        return self._request('POST', f'/nodes/{node}/lxc/{vmid}/vncproxy', params=params)
     
     def update_vm_config(self, node: str, vmid: int, params: Dict) -> Dict:
         """
@@ -412,9 +452,9 @@ class PVEAPIClient:
         result = self._request('DELETE', f'/nodes/{node}/qemu/{vmid}', params=params)
         return result
     
-    def delete_container(self, node: str, vmid: int) -> Dict:
+    def delete_container(self, node: str, vmid: int, params: Dict = None) -> Dict:
         """删除LXC容器。"""
-        result = self._request('DELETE', f'/nodes/{node}/lxc/{vmid}')
+        result = self._request('DELETE', f'/nodes/{node}/lxc/{vmid}', params=params)
         return result if isinstance(result, dict) else {}
     def get_storage(self, node: str) -> List[Dict]:
         """获取存储列表。"""
@@ -809,3 +849,53 @@ class PVEAPIClient:
             data['unique'] = 1
             
         return self._request('POST', f'/nodes/{node}/qemu', data=data)
+
+    # ==================== LXC 快照管理 ====================
+
+    def list_container_snapshots(self, node: str, vmid: int) -> List[Dict]:
+        """获取LXC容器快照列表。"""
+        result = self._request('GET', f'/nodes/{node}/lxc/{vmid}/snapshot')
+        return result if isinstance(result, list) else [result] if result else []
+
+    def create_container_snapshot(self, node: str, vmid: int, name: str, 
+                                 description: str = '') -> str:
+        """创建LXC容器快照。"""
+        data = {
+            'snapname': name,
+            'description': description or '',
+        }
+        return self._request('POST', f'/nodes/{node}/lxc/{vmid}/snapshot', data=data)
+
+    def update_container_snapshot(self, node: str, vmid: int, snapname: str, description: str) -> None:
+        """更新LXC容器快照描述。"""
+        data = {'description': description}
+        return self._request('PUT', f'/nodes/{node}/lxc/{vmid}/snapshot/{snapname}/config', data=data)
+
+    def rollback_container_snapshot(self, node: str, vmid: int, snapname: str) -> str:
+        """回滚LXC容器快照。"""
+        return self._request('POST', f'/nodes/{node}/lxc/{vmid}/snapshot/{snapname}/rollback')
+
+    def delete_container_snapshot(self, node: str, vmid: int, snapname: str, force: bool = False) -> str:
+        """删除LXC容器快照。"""
+        params = {}
+        if force:
+            params['force'] = 1
+        return self._request('DELETE', f'/nodes/{node}/lxc/{vmid}/snapshot/{snapname}', params=params)
+
+    def restore_container(self, node: str, vmid: int, storage: str, archive: str, 
+                         force: bool = False, unique: bool = False) -> str:
+        """
+        还原LXC容器备份。
+        """
+        data = {
+            'vmid': vmid,
+            'ostemplate': archive,
+            'storage': storage,
+            'restore': 1
+        }
+        if force:
+            data['force'] = 1
+        if unique:
+            data['unique'] = 1
+            
+        return self._request('POST', f'/nodes/{node}/lxc', data=data)
