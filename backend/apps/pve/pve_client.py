@@ -269,6 +269,10 @@ class PVEAPIClient:
         }
         return self._request('POST', f'/nodes/{node}/lxc/{vmid}/vncproxy', params=params)
     
+    def create_lxc_console(self, node: str, vmid: int) -> Dict:
+        """创建LXC控制台会话（create_lxc_vnc_proxy的别名）。"""
+        return self.create_lxc_vnc_proxy(node, vmid, websocket=True)
+    
     def update_vm_config(self, node: str, vmid: int, params: Dict) -> Dict:
         """
         更新虚拟机硬件配置。
@@ -286,7 +290,7 @@ class PVEAPIClient:
         """更新LXC容器配置。"""
         if not params:
             raise ValueError("params 不能为空")
-        return self._request('POST', f'/nodes/{node}/lxc/{vmid}/config', params=params)
+        return self._request('PUT', f'/nodes/{node}/lxc/{vmid}/config', params=params)
     
     def create_vm(self, node: str, vmid: int, config: Dict) -> Dict:
         """
@@ -860,6 +864,19 @@ class PVEAPIClient:
     def create_container_snapshot(self, node: str, vmid: int, name: str, 
                                  description: str = '') -> str:
         """创建LXC容器快照。"""
+        # 验证快照名称：不能是纯数字
+        if not name or not isinstance(name, str):
+            raise ValueError("快照名称不能为空")
+        
+        # PVE 要求快照名称不能是纯数字
+        if name.isdigit():
+            raise ValueError("快照名称不能是纯数字，请使用包含字母的名称（例如：snap123 或 snapshot-1）")
+        
+        # 检查名称是否符合 PVE 配置 ID 格式（字母开头，可包含字母、数字、下划线、连字符）
+        import re
+        if not re.match(r'^[a-zA-Z][a-zA-Z0-9_-]*$', name):
+            raise ValueError("快照名称必须以字母开头，只能包含字母、数字、下划线和连字符")
+        
         data = {
             'snapname': name,
             'description': description or '',
@@ -899,3 +916,58 @@ class PVEAPIClient:
             data['unique'] = 1
             
         return self._request('POST', f'/nodes/{node}/lxc', data=data)
+    
+    def clone_container(self, node: str, vmid: int, newid: int, 
+                       hostname: str = None, description: str = None,
+                       full: bool = True, pool: str = None,
+                       snapname: str = None, storage: str = None,
+                       target: str = None) -> str:
+        """
+        克隆LXC容器。
+        
+        Args:
+            node: 节点名称
+            vmid: 源容器ID
+            newid: 新容器ID
+            hostname: 新容器主机名
+            description: 描述
+            full: 是否完整克隆（True）或链接克隆（False）
+            pool: 资源池
+            snapname: 基于指定快照克隆
+            storage: 目标存储
+            target: 目标节点（跨节点克隆）
+            
+        Returns:
+            任务UPID
+        """
+        params = {
+            'newid': newid,
+        }
+        
+        if hostname:
+            params['hostname'] = hostname
+        if description:
+            params['description'] = description
+        if full is not None:
+            params['full'] = 1 if full else 0
+        if pool:
+            params['pool'] = pool
+        if snapname:
+            params['snapname'] = snapname
+        if storage:
+            params['storage'] = storage
+        if target:
+            params['target'] = target
+            
+        return self._request('POST', f'/nodes/{node}/lxc/{vmid}/clone', params=params)
+    
+    def convert_to_template(self, node: str, vmid: int) -> None:
+        """
+        将LXC容器转换为模板。
+        
+        Args:
+            node: 节点名称
+            vmid: 容器ID
+        """
+        return self._request('POST', f'/nodes/{node}/lxc/{vmid}/template')
+

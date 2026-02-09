@@ -25,6 +25,7 @@ import {
   Modal,
   InputNumber,
   Checkbox,
+  Space,
 } from 'ant-design-vue';
 
 import { getLxcListApi, operateLxcApi, syncLxcListApi, deleteLxcApi } from '#/api/pve/lxc';
@@ -188,6 +189,7 @@ const openCreateModal = () => {
 const handleCreateSuccess = () => {
   fetchData();
 };
+
 </script>
 
 <template>
@@ -326,3 +328,4 @@ const handleCreateSuccess = () => {
     </Modal>
   </div>
 </template>
+

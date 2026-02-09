@@ -365,3 +365,16 @@ class LXCContainerActionSerializer(serializers.Serializer):
         if not isinstance(value, dict):
             raise serializers.ValidationError('附加元信息必须为JSON对象')
         return value
+
+
+class LXCContainerCloneSerializer(serializers.Serializer):
+    """LXC容器克隆序列化器。"""
+    
+    newid = serializers.IntegerField(required=False, allow_null=True, help_text='新容器ID（留空自动获取）')
+    hostname = serializers.CharField(max_length=255, required=False, allow_blank=True, help_text='新容器主机名')
+    description = serializers.CharField(required=False, allow_blank=True, help_text='新容器描述')
+    full = serializers.BooleanField(default=True, required=False, help_text='是否完整克隆（否则为链接克隆）')
+    pool = serializers.CharField(required=False, allow_blank=True, help_text='目标资源池（可选）')
+    snapname = serializers.CharField(required=False, allow_blank=True, help_text='基于指定快照克隆（可选）')
+    storage = serializers.CharField(required=False, allow_blank=True, help_text='目标存储（可选）')
+    target = serializers.CharField(required=False, allow_blank=True, help_text='目标节点（可选，跨节点克隆）')

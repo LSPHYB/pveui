@@ -53,6 +53,7 @@ from .serializers import (
     LXCContainerDetailSerializer,
     LXCContainerCreateSerializer,
     LXCContainerActionSerializer,
+    LXCContainerCloneSerializer,
 )
 from .pve_client import PVEAPIClient
 from .consumers import SESSION_CACHE_PREFIX
@@ -2011,11 +2012,32 @@ class LXCContainerViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, ActionS
             
             result = client.create_container(data['node'], params)
             
+            # 创建数据库记录并保存SSH密码
+            vmid = params.get('vmid')
+            container, created = LXCContainer.objects.update_or_create(
+                server=server,
+                vmid=vmid,
+                defaults={
+                    'name': data['hostname'],
+                    'node': data['node'],
+                    'status': 'creating' if not start_after_create else 'starting',
+                    'ip_address': data.get('ip_address', 'dhcp'),
+                    'ssh_password': data['password'],  # 保存SSH密码
+                    'cpu_cores': data.get('cores', 1),  # 正确的字段名
+                    'memory_mb': data.get('memory', 512),  # 正确的字段名
+                    'disk_gb': data.get('disk_size', 8),  # 正确的字段名
+                    'description': data.get('description', ''),
+                }
+            )
+            
+            logger.info(f'LXC容器 {vmid} 创建任务已提交，数据库记录已{"创建" if created else "更新"}，SSH密码已保存')
+            
             return Response({
                 'success': True,
                 'message': 'LXC容器创建任务已提交',
                 'upid': result,
-                'vmid': params.get('vmid')
+                'vmid': vmid,
+                'container_id': container.id
             })
             
         except Exception as exc:
@@ -2664,6 +2686,295 @@ class LXCContainerViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, ActionS
             return Response({
                 'detail': f'更新快照描述失败: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'])
+    def clone(self, request, pk=None):
+        """克隆容器。"""
+        container = self.get_object()
+        serializer = LXCContainerCloneSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            
+            # 获取新容器ID
+            newid = data.get('newid')
+            if not newid:
+                newid = client.get_next_vmid()
+            
+            # 执行克隆
+            result = client.clone_container(
+                node=container.node,
+                vmid=container.vmid,
+                newid=newid,
+                hostname=data.get('hostname'),
+                description=data.get('description'),
+                full=data.get('full', True),
+                pool=data.get('pool'),
+                snapname=data.get('snapname'),
+                storage=data.get('storage'),
+                target=data.get('target')
+            )
+            
+            # 克隆成功后，创建新容器的数据库记录并复制 SSH 密码
+            try:
+                # 尝试获取新容器的配置信息
+                # 由于全量克隆可能需要较长时间，此时容器可能尚未完全就绪，获取配置可能会失败
+                # 因此如果获取失败，我们仍然创建数据库记录，以便保存SSH密码等信息
+                # 后续的状态同步会更新准确的配置信息
+                new_container_config = {}
+                try:
+                    # 等待一小段时间让 PVE 完成克隆任务的初始化
+                    import time
+                    time.sleep(1)
+                    new_container_config = client.get_container_config(container.node, newid)
+                except Exception as config_error:
+                    logger.warning(f'获取新容器配置失败(可能是克隆仍在进行中): {config_error}，将使用空配置创建记录')
+                
+                # 创建新容器的数据库记录
+                new_container = LXCContainer.objects.create(
+                    server=server,
+                    vmid=newid,
+                    name=data.get('hostname') or f"{container.name}-clone",
+                    node=data.get('target') or container.node,
+                    status='stopped',  # 克隆后的容器默认是停止状态
+                    cpu_cores=container.cpu_cores,
+                    memory_mb=container.memory_mb,
+                    disk_gb=container.disk_gb,
+                    ip_address='',  # IP 地址需要容器启动后才能获取
+                    ssh_password=container.ssh_password,  # 复制源容器的 SSH 密码
+                    description=data.get('description') or f"克隆自 {container.name}",
+                    pve_config=new_container_config,
+                    created_by=request.user,
+                    updated_by=request.user
+                )
+                
+                logger.info(f'已创建克隆容器的数据库记录: {new_container.name} (VMID: {newid}), SSH密码已复制')
+                
+            except Exception as e:
+                # 如果创建数据库记录失败，记录错误但不影响克隆操作
+                logger.warning(f'创建克隆容器数据库记录失败: {e}，容器已在 PVE 中创建')
+            
+            return Response({
+                'success': True,
+                'upid': result,
+                'newid': newid,
+                'message': f'容器克隆任务已提交，新容器ID: {newid}'
+            })
+        except Exception as e:
+            logger.exception('克隆容器失败')
+            return Response({
+                'detail': f'克隆容器失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'])
+    def convert_to_template(self, request, pk=None):
+        """将容器转换为模板。"""
+        container = self.get_object()
+        
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            
+            # 检查容器状态
+            status_info = client.get_container_status(container.node, container.vmid)
+            if status_info.get('status') == 'running':
+                return Response({
+                    'detail': '容器正在运行，请先停止容器再转换为模板'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 转换为模板
+            client.convert_to_template(container.node, container.vmid)
+            
+            # 更新数据库状态
+            container.status = 'template'
+            container.save(update_fields=['status'])
+            
+            return Response({
+                'success': True,
+                'message': '容器已成功转换为模板'
+            })
+        except Exception as e:
+            logger.exception('转换模板失败')
+            return Response({
+                'detail': f'转换模板失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'], url_path='console-session')
+    def console_session(self, request, pk=None):
+        """创建 LXC noVNC 控制台会话。"""
+        container = self.get_object()
+        
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            
+            # 检查容器状态
+            status_info = client.get_container_status(container.node, container.vmid)
+            if status_info.get('status') != 'running':
+                return Response({
+                    'error': '容器未运行，无法打开控制台'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 获取 PVE 控制台 WebSocket URL
+            console_data = client.create_lxc_console(container.node, container.vmid)
+            
+            if not console_data:
+                return Response({
+                    'error': '无法创建控制台会话'
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # 提取必要信息
+            ticket = console_data.get('ticket')
+            port = console_data.get('port')
+            user = console_data.get('user', 'root')
+            
+            if not ticket or not port:
+                return Response({
+                    'error': '控制台会话信息不完整'
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # 构建 WebSocket URL
+            ws_protocol = 'wss' if server.port == 8006 and not server.host.startswith('http://') else 'ws'
+            pve_host = server.host.replace('https://', '').replace('http://', '')
+            websocket_url = f'{ws_protocol}://{pve_host}:{server.port}/api2/json/nodes/{container.node}/lxc/{container.vmid}/vncwebsocket?port={port}&vncticket={quote_plus(ticket)}'
+            
+            # 生成临时 session token 用于前端代理认证
+            session_token = secrets.token_urlsafe(32)
+            
+            # 存储会话信息到缓存
+            session_data = {
+                'websocket_url': websocket_url,
+                'ticket': ticket,
+                'port': port,
+                'user': user,
+                'origin': request.build_absolute_uri('/'),
+            }
+            
+            cache_key = SESSION_CACHE_PREFIX + session_token
+            cache.set(cache_key, session_data, timeout=PVE_CONSOLE_SESSION_TTL)
+            
+            # 返回代理 URL (通过后端中转) - 使用 LXC 专用路由
+            ws_proto = 'wss' if request.is_secure() else 'ws'
+            proxy_url = f'{ws_proto}://{request.get_host()}/ws/lxc/console/{container.id}/?token={session_token}'
+            
+            return Response({
+                'proxy_url': proxy_url,
+                'websocket_url': websocket_url,  # 备用直连
+                'ticket': ticket,
+                'token': session_token,
+                'status': 'created'
+            })
+            
+        except Exception as e:
+            logger.exception('创建控制台会话失败')
+            return Response({
+                'error': f'创建控制台会话失败: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @action(detail=True, methods=['post'], url_path='ssh-console-session')
+    def ssh_console_session(self, request, pk=None):
+        """创建 LXC SSH 控制台会话。"""
+        container = self.get_object()
+        
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            
+            # 检查容器状态
+            status_info = client.get_container_status(container.node, container.vmid)
+            if status_info.get('status') != 'running':
+                return Response({
+                    'error': '容器未运行，无法建立 SSH 连接'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 获取容器配置，提取 IP 地址
+            config = client.get_container_config(container.node, container.vmid)
+            
+            # 从多个来源尝试获取 IP
+            container_ip = container.ip_address  # 优先使用数据库中的 IP
+            
+            if not container_ip or container_ip == 'dhcp':
+                # 尝试从 net0 配置解析 IP（格式：name=eth0,bridge=vmbr0,ip=192.168.1.100/24）
+                import re
+                net0 = config.get('net0', '')
+                ip_match = re.search(r'ip=([0-9.]+)', net0)
+                if ip_match:
+                    container_ip = ip_match.group(1)
+            
+            # 去除 CIDR 表示法（如 /24）
+            if container_ip and '/' in container_ip:
+                container_ip = container_ip.split('/')[0]
+                logger.info(f'从IP地址中去除CIDR表示法，最终IP: {container_ip}')
+            
+            if not container_ip or container_ip == 'dhcp':
+                return Response({
+                    'error': '无法获取容器 IP 地址，请确保容器配置了静态 IP 或在数据库中设置了 IP'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 生成临时 session token
+            session_token = secrets.token_urlsafe(32)
+            
+            # 将会话信息存入缓存（60秒有效期）
+            session_data = {
+                'container_id': container.id,
+                'vmid': container.vmid,
+                'node': container.node,
+                'host': container_ip,  # 纯IP地址，不含CIDR
+                'port': 22,
+                'username': 'root',  # 默认 root，可从配置读取
+                'server_id': server.id,
+            }
+            
+            cache_key = f'ssh_console_session:{session_token}'
+            cache.set(cache_key, session_data, timeout=60)
+            
+            # 构建 WebSocket URL
+            ws_protocol = 'wss' if request.is_secure() else 'ws'
+            ws_host = request.get_host()
+            proxy_url = f'{ws_protocol}://{ws_host}/ws/ssh/{container.id}/?token={session_token}'
+            
+            return Response({
+                'websocket_url': proxy_url,
+                'proxy_url': proxy_url,
+                'host': container_ip,  # 纯IP地址
+                'port': 22,
+                'username': 'root',
+                'token': session_token,
+                'status': 'created'
+            })
+            
+        except Exception as e:
+            logger.exception('创建 SSH 控制台会话失败')
+            return Response({
+                'error': f'创建 SSH 会话失败: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['post'], url_path='sync_all')
     def sync_all(self, request):

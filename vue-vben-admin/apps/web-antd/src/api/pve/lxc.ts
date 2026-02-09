@@ -81,10 +81,17 @@ export async function updateLxcConfigApi(id: number | string, params: any) {
 }
 
 /**
- * 获取容器控制台会话
+ * 获取容器控制台会话 (noVNC)
  */
 export async function getLxcConsoleApi(id: number | string) {
   return requestClient.post(`${Api.GetLxcs}${id}/console-session/`);
+}
+
+/**
+ * 获取容器SSH控制台会话 (WebSSH)
+ */
+export async function getLxcSshConsoleApi(id: number | string) {
+  return requestClient.post(`${Api.GetLxcs}${id}/ssh-console-session/`);
 }
 
 /**
@@ -217,3 +224,18 @@ export async function getPveStorageContentApi(
 export async function getNextVmidApi(serverId: number) {
   return requestClient.get<any>(`/pve/servers/${serverId}/next-vmid/`);
 }
+
+/**
+ * 克隆容器
+ */
+export async function cloneLxcApi(id: number | string, data: any) {
+  return requestClient.post<any>(`${Api.GetLxcs}${id}/clone/`, data);
+}
+
+/**
+ * 将容器转换为模板
+ */
+export async function convertLxcToTemplateApi(id: number | string) {
+  return requestClient.post<any>(`${Api.GetLxcs}${id}/convert_to_template/`);
+}
+

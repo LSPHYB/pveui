@@ -9,7 +9,9 @@ import {
   AppstoreOutlined,
   ArrowDownOutlined,
   ArrowUpOutlined,
+  CodeOutlined,
   CopyOutlined,
+  DesktopOutlined,
   DownOutlined,
   FileTextOutlined,
   HddOutlined,
@@ -27,15 +29,25 @@ import {
   MenuItem,
   message,
   Modal,
+  Segmented,
   Space,
   Spin,
+  Form,
+  FormItem,
+  Input,
+  InputNumber,
+  Checkbox,
 } from 'ant-design-vue';
 
 import {
   getLxcConsoleApi,
   getLxcStatusByIdApi,
   operateLxcApi,
+  cloneLxcApi,
+  convertLxcToTemplateApi,
 } from '#/api/pve/lxc';
+
+import WebSshConsole from './WebSshConsole.vue';
 
 defineOptions({ name: 'LxcConsole' });
 
@@ -44,6 +56,9 @@ const props = defineProps<{
   lxc: null | LxcContainerModel;
   lxcId: string;
 }>();
+
+// Console type: 'novnc' or 'ssh'
+const consoleType = ref<'novnc' | 'ssh'>('ssh'); // Default to SSH for better LXC experience
 
 const novncContainer = ref<HTMLElement | null>(null);
 const consoleLoading = ref(false);
@@ -191,9 +206,130 @@ const getActionLabel = (action: string) => {
   return map[action] || action;
 };
 
-const handleClone = () => message.info('克隆功能开发中');
-const handleTemplate = () => message.info('转换为模板功能开发中');
-const handleReloadConsole = () => initConsole();
+
+// Clone and Template Logic
+const cloneModalVisible = ref(false);
+const cloneForm = ref({
+  newid: undefined as number | undefined,
+  hostname: '',
+  description: '',
+  full: true,
+  storage: '',
+  target: '',
+});
+
+
+const handleCloneClick = () => {
+  if (!props.lxc) return;
+  
+  // 检查容器状态并给出提示
+  const status = lxcStatus.value?.status || props.lxc.status;
+  if (status === 'running') {
+    Modal.warning({
+      title: '克隆运行中的容器',
+      content: `容器正在运行。Proxmox VE 对运行中容器的克隆有以下限制：\n\n1. 完整克隆：需要先创建快照\n2. 链接克隆：可以直接克隆，但依赖源容器\n\n建议：\n• 如需完整克隆，请先停止容器或创建快照\n• 如需快速克隆，可选择"链接克隆"模式`,
+      okText: '继续克隆',
+      onOk: () => {
+        openCloneModal();
+      },
+    });
+  } else {
+    openCloneModal();
+  }
+};
+
+const openCloneModal = () => {
+  if (!props.lxc) return;
+  const status = lxcStatus.value?.status || props.lxc.status;
+  
+  cloneForm.value = {
+    newid: undefined,
+    hostname: `${props.lxc.name}-clone`,
+    description: `克隆自 ${props.lxc.name}`,
+    full: status === 'stopped', // 运行中默认链接克隆，停止时默认完整克隆
+    storage: '',
+    target: '',
+  };
+  cloneModalVisible.value = true;
+};
+
+const performClone = async () => {
+  if (!props.lxcId) return;
+  
+  // 再次检查状态和克隆模式
+  const status = lxcStatus.value?.status || props.lxc?.status;
+  if (status === 'running' && cloneForm.value.full) {
+    Modal.error({
+      title: '无法执行完整克隆',
+      content: '容器正在运行，无法进行完整克隆。\n\n请选择以下方案之一：\n1. 停止容器后再进行完整克隆\n2. 先创建快照，然后基于快照克隆\n3. 使用"链接克隆"模式（取消勾选"完整克隆"）',
+    });
+    return;
+  }
+  
+  try {
+    actionLoading.value = true;
+    const res: any = await cloneLxcApi(props.lxcId, cloneForm.value);
+    message.success(`克隆任务已提交，新容器ID: ${res.newid || '自动分配'}`);
+    cloneModalVisible.value = false;
+  } catch (error: any) {
+    const errorMsg = error.message || error.response?.data?.detail || '未知错误';
+    
+    // 特殊处理常见错误
+    if (errorMsg.includes('without snapshots')) {
+      Modal.error({
+        title: '克隆失败',
+        content: '无法对运行中的容器进行完整克隆（需要快照）。\n\n解决方案：\n1. 停止容器后再克隆\n2. 先创建快照，然后基于快照克隆\n3. 使用"链接克隆"模式',
+      });
+    } else {
+      message.error(`克隆失败: ${errorMsg}`);
+    }
+  } finally {
+    actionLoading.value = false;
+  }
+};
+
+const handleTemplateClick = () => {
+  if (!props.lxc) return;
+  
+  Modal.confirm({
+    title: '确认转换为模板',
+    content: `确定要将容器 "${props.lxc.name}" (VMID: ${props.lxc.vmid}) 转换为模板吗？\n\n注意：\n1. 容器必须处于停止状态\n2. 转换后将无法直接启动，只能用于克隆\n3. 此操作不可逆`,
+    okText: '确认转换',
+    okType: 'primary',
+    cancelText: '取消',
+    onOk: async () => {
+      try {
+        actionLoading.value = true;
+        await convertLxcToTemplateApi(props.lxcId);
+        message.success('容器已成功转换为模板');
+        setTimeout(fetchStatus, 1000);
+      } catch (error: any) {
+        message.error(`转换失败: ${error.message || '未知错误'}`);
+      } finally {
+        actionLoading.value = false;
+      }
+    },
+  });
+};
+const handleReloadConsole = () => {
+  if (consoleType.value === 'novnc') {
+    initConsole();
+  }
+  // SSH console has its own reload button
+};
+
+const consoleTypeOptions = [
+  {
+    label: 'SSH 终端',
+    value: 'ssh',
+    icon: CodeOutlined,
+  },
+  {
+    label: 'noVNC',
+    value: 'novnc',
+    icon: DesktopOutlined,
+  },
+];
 
 // --- Console Logic ---
 
@@ -406,9 +542,23 @@ onBeforeUnmount(() => {
 <template>
   <div class="console-layout">
     <div class="console-toolbar">
-      <!-- Left: Resources Status -->
+      <!-- Left: Resources Status & Console Type Switcher -->
       <div class="resources-info">
         <Space size="large">
+          <!-- Console Type Switcher -->
+          <Segmented
+            v-model:value="consoleType"
+            :options="consoleTypeOptions"
+            size="small"
+          >
+            <template #label="{ payload }">
+              <div class="console-type-option">
+                <component :is="payload.icon" class="icon" />
+                <span>{{ payload.label }}</span>
+              </div>
+            </template>
+          </Segmented>
+
           <div class="info-item">
             <AppstoreOutlined class="icon" />
             <span class="value">{{ statusDisplay.cpu }}</span>
@@ -475,10 +625,10 @@ onBeforeUnmount(() => {
           <Dropdown>
             <template #overlay>
               <Menu>
-                <MenuItem key="clone" @click="handleClone">
+                <MenuItem key="clone" @click="handleCloneClick">
                   <Space><CopyOutlined /> 克隆</Space>
                 </MenuItem>
-                <MenuItem key="template" @click="handleTemplate">
+                <MenuItem key="template" @click="handleTemplateClick">
                   <Space><FileTextOutlined /> 转换为模板</Space>
                 </MenuItem>
               </Menu>
@@ -486,7 +636,11 @@ onBeforeUnmount(() => {
             <Button> 更多 <DownOutlined /> </Button>
           </Dropdown>
 
-          <Button type="text" @click="handleReloadConsole">
+          <Button
+            v-if="consoleType === 'novnc'"
+            type="text"
+            @click="handleReloadConsole"
+          >
             <template #icon><ReloadOutlined /></template>
           </Button>
         </Space>
@@ -495,7 +649,16 @@ onBeforeUnmount(() => {
 
     <!-- Console Area -->
     <div class="console-viewport">
-      <div class="pve-console-wrapper">
+      <!-- SSH Console -->
+      <WebSshConsole
+        v-if="consoleType === 'ssh'"
+        :lxc-id="lxcId"
+        :lxc="lxc"
+        :active="active"
+      />
+
+      <!-- noVNC Console -->
+      <div v-else class="pve-console-wrapper">
         <div v-if="consoleLoading" class="console-overlay">
           <Spin size="large" />
           <p class="mt-4 text-gray-400">正在建立连接...</p>
@@ -511,6 +674,89 @@ onBeforeUnmount(() => {
         ></div>
       </div>
     </div>
+
+    <!-- Clone Modal -->
+    <Modal
+      v-model:open="cloneModalVisible"
+      title="克隆容器"
+      :confirm-loading="actionLoading"
+      ok-text="开始克隆"
+      cancel-text="取消"
+      @ok="performClone"
+      width="600px"
+    >
+      <div v-if="lxc">
+        <div class="mb-4 rounded border border-blue-200 bg-blue-50 p-3 text-blue-700">
+          <div class="mb-1 font-bold">源容器信息</div>
+          名称: <b>{{ lxc.name }}</b> (VMID: {{ lxc.vmid }})
+        </div>
+
+        <Form layout="vertical">
+          <FormItem label="新容器ID">
+            <InputNumber
+              v-model:value="cloneForm.newid"
+              placeholder="留空自动分配"
+              class="w-full"
+              :min="100"
+            />
+            <div class="mt-1 text-xs text-gray-400">
+              留空将自动分配下一个可用的 VMID
+            </div>
+          </FormItem>
+
+          <FormItem label="主机名">
+            <Input
+              v-model:value="cloneForm.hostname"
+              placeholder="新容器的主机名"
+            />
+          </FormItem>
+
+          <FormItem label="描述">
+            <Input
+              v-model:value="cloneForm.description"
+              placeholder="新容器的描述信息"
+            />
+          </FormItem>
+
+          <FormItem label="克隆模式">
+            <Checkbox v-model:checked="cloneForm.full">
+              完整克隆
+            </Checkbox>
+            <div class="ml-6 mt-1 text-xs text-gray-400">
+              <div class="mb-1">
+                <b>完整克隆：</b>复制所有数据，新容器完全独立（推荐用于生产环境）
+              </div>
+              <div class="mb-1">
+                <b>链接克隆：</b>创建引用，速度快但依赖源容器（适合测试环境）
+              </div>
+              <div 
+                v-if="lxcStatus?.status === 'running'" 
+                class="mt-2 rounded bg-yellow-50 p-2 text-yellow-700"
+              >
+                ⚠️ 容器正在运行，完整克隆需要先创建快照或停止容器
+              </div>
+            </div>
+          </FormItem>
+
+          <FormItem label="目标存储（可选）">
+            <Input
+              v-model:value="cloneForm.storage"
+              placeholder="留空使用默认存储"
+            />
+          </FormItem>
+
+          <FormItem label="目标节点（可选）">
+            <Input
+              v-model:value="cloneForm.target"
+              placeholder="留空克隆到同一节点"
+            />
+            <div class="mt-1 text-xs text-gray-400">
+              跨节点克隆需要共享存储或完整克隆模式
+            </div>
+          </FormItem>
+        </Form>
+      </div>
+    </Modal>
   </div>
 </template>
 
@@ -569,6 +815,17 @@ onBeforeUnmount(() => {
 
 .info-item .icon-down {
   color: #1890ff;
+}
+
+/* Console Type Switcher */
+.console-type-option {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.console-type-option .icon {
+  font-size: 14px;
 }
 
 /* Text colors */
