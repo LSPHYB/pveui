@@ -159,3 +159,34 @@ class UserOrganization(models.Model):
         primary_mark = ' (主)' if self.is_primary else ''
         return f"{self.user} -> {self.organization}{primary_mark}"
 
+
+class UserProfile(models.Model):
+    """用户扩展信息：头像、简介等。"""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile', verbose_name='用户')
+    avatar = models.ImageField(upload_to='avatars/', blank=True, null=True, verbose_name='头像')
+    biography = models.TextField(blank=True, default='', verbose_name='个人简介')
+    
+    class Meta:
+        verbose_name = '用户配置'
+        verbose_name_plural = '用户配置'
+
+    def __str__(self):
+        return f"{self.user.username} Profile"
+
+# 信号：自动创建/保存 UserProfile
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+@receiver(post_save, sender=User)
+def create_user_profile(sender, instance, created, **kwargs):
+    if created:
+        UserProfile.objects.create(user=instance)
+
+@receiver(post_save, sender=User)
+def save_user_profile(sender, instance, **kwargs):
+    # 确保 profile 存在
+    if not hasattr(instance, 'profile'):
+        UserProfile.objects.create(user=instance)
+    else:
+        instance.profile.save()
+

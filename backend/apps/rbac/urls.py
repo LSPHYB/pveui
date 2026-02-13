@@ -22,6 +22,7 @@ Including another URLconf
 
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     MenuViewSet,
     PermissionViewSet,
@@ -66,6 +67,7 @@ urlpatterns = [
     path('auth/change-password/', ChangePasswordView.as_view()),
     path('auth/permissions/', UserPermissionsView.as_view()),
     path('auth/organizations/', UserOrganizationsView.as_view()),
+    path('auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     # router 的路由放在最后
     path('', include(router.urls)),
 ]

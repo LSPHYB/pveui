@@ -175,9 +175,9 @@ watch(
       <UserDropdown
         :avatar
         :menus
-        :text="userStore.userInfo?.realName"
-        description="ann.vben@gmail.com"
-        tag-text="Pro"
+        :text="userStore.userInfo?.realName || userStore.userInfo?.username"
+        :description="userStore.userInfo?.email || userStore.userInfo?.biography || ''"
+        :tag-text="userStore.userInfo?.is_superuser ? 'Admin' : 'User'"
         @logout="handleLogout"
       />
     </template>

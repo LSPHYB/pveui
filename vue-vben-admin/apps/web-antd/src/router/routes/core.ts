@@ -59,6 +59,14 @@ const coreRoutes: RouteRecordRaw[] = [
           currentActiveMenu: '/pve/lxc',
         },
       },
+      {
+        path: 'profile/index',
+        name: 'Profile',
+        component: () => import('#/views/system/profile/index.vue'),
+        meta: {
+          title: '个人中心',
+        },
+      },
     ],
   },
   {

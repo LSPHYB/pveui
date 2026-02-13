@@ -71,7 +71,7 @@ export async function loginApi(data: AuthApi.LoginParams) {
     // 尝试打印所有key帮助调试
     try {
       console.log('[Login API] 响应Keys:', Object.keys(response));
-    } catch {}
+    } catch { }
   }
 
   // 将Django的响应格式转换为Vben期望的格式
@@ -120,6 +120,16 @@ export async function refreshTokenApi() {
     console.log('[RefreshToken API] ✅ 刷新成功, 获取到新的 AccessToken');
   } else {
     console.error('[RefreshToken API] ❌ 刷新失败: 响应中未找到 access token');
+  }
+
+  // 提取并更新 refresh token (因为后端开启了 ROTATE_REFRESH_TOKENS)
+  const newRefreshToken =
+    response?.refresh ||
+    response?.data?.refresh;
+
+  if (newRefreshToken) {
+    localStorage.setItem('refresh_token', newRefreshToken);
+    console.log('[RefreshToken API] 💾 已更新 refresh_token 到 localStorage');
   }
 
   return {

@@ -1,4 +1,4 @@
-import type { ChangePasswordParams, OrganizationInfo } from './types';
+import type { ChangePasswordParams, OrganizationInfo, UserInfo } from './types';
 
 /**
  * 用户认证相关API - Django特有接口
@@ -26,4 +26,34 @@ export async function getUserPermissionsApi() {
  */
 export async function getUserOrganizationsApi() {
   return requestClient.get<OrganizationInfo[]>('/rbac/auth/organizations/');
+}
+
+/**
+ * 更新用户信息
+ */
+/**
+ * 更新用户信息
+ */
+export async function updateUserInfoApi(data: Partial<UserInfo>) {
+  // Use the self-update endpoint, ignore ID
+  return requestClient.request<UserInfo>('/rbac/auth/user-info/', {
+    method: 'PATCH',
+    data,
+  });
+}
+
+/**
+ * 上传头像
+ */
+export async function uploadAvatarApi(file: File) {
+  const formData = new FormData();
+  formData.append('avatar', file);
+
+  return requestClient.request<UserInfo>('/rbac/auth/user-info/', {
+    method: 'PATCH',
+    data: formData,
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
 }

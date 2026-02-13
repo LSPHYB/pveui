@@ -33,6 +33,9 @@ export interface UserInfo {
   username: string;
   email?: string;
   realName?: string; // 真实姓名
+  first_name?: string;
+  last_name?: string;
+  biography?: string;
   avatar?: string; // 头像URL
   is_superuser?: boolean;
   roles: RoleInfo[] | string[];
