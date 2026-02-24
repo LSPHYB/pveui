@@ -67,6 +67,44 @@ const coreRoutes: RouteRecordRaw[] = [
           title: '个人中心',
         },
       },
+      // ─── 实验课程：含动态参数的隐藏页（与 PVE 详情页模式一致，直接注册到根路由） ───
+      {
+        path: 'experiments/teacher/create',
+        name: 'TeacherExperimentCreate',
+        component: () => import('#/views/experiments/teacher/ExperimentForm.vue'),
+        meta: { hideInMenu: true, title: '创建实验', activePath: '/experiments/teacher' },
+      },
+      {
+        path: 'experiments/teacher/edit/:id',
+        name: 'TeacherExperimentEdit',
+        component: () => import('#/views/experiments/teacher/ExperimentForm.vue'),
+        meta: { hideInMenu: true, title: '编辑实验', activePath: '/experiments/teacher' },
+      },
+      {
+        path: 'experiments/teacher/grade/:id',
+        name: 'TeacherGradeSubmission',
+        component: () => import('#/views/experiments/teacher/GradeSubmission.vue'),
+        meta: { hideInMenu: true, title: '批改作业', activePath: '/experiments/teacher/submissions' },
+      },
+      {
+        path: 'experiments/student/:id',
+        name: 'StudentExperimentDetail',
+        component: () => import('#/views/experiments/student/ExperimentDetail.vue'),
+        meta: { hideInMenu: true, title: '实验详情', activePath: '/experiments/student' },
+      },
+      {
+        path: 'experiments/student/:id/grade',
+        name: 'StudentGradeView',
+        component: () => import('#/views/experiments/student/GradeView.vue'),
+        meta: { hideInMenu: true, title: '查看成绩', activePath: '/experiments/student' },
+      },
+      {
+        path: 'experiments/student/submissions/:id/edit',
+        name: 'StudentSubmissionEditor',
+        component: () => import('#/views/experiments/student/SubmissionEditor.vue'),
+        meta: { hideInMenu: true, title: '编辑报告', activePath: '/experiments/student' },
+      },
+
     ],
   },
   {

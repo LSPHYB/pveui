@@ -35,6 +35,7 @@ urlpatterns = [
     path('api/chat/', include('apps.chat.urls')),
     path('api/system/', include('apps.system.urls')),
     path('api/pve/', include('apps.pve.urls')),
+    path('api/v1/', include('apps.experiments.urls')),
 ]
 
 # 仅当定义了 MEDIA_ROOT 时才添加媒体文件映射（避免导入期 AttributeError）
