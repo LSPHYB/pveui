@@ -628,30 +628,6 @@ data: {"id": 11, "role": "ai", "content": "chmod 755 是Linux文件权限设置�
 6. 保存AI回复到数据库
 7. 返回响应
 
-#### 2) 消息反馈
-
-```http
-POST /api/v1/chat/messages/{id}/feedback/
-```
-
-**请求体**：
-
-```json
-{
-  "feedback": "helpful",        // helpful / not_helpful
-  "feedback_detail": "回答很准确，帮我解决了问题"
-}
-```
-
-**响应示例**：
-
-```json
-{
-  "code": 200,
-  "message": "反馈成功",
-  "data": null
-}
-```
 
 ------
 
@@ -661,15 +637,53 @@ POST /api/v1/chat/messages/{id}/feedback/
 ```http
 GET /api/v1/admin/ai/models/
 ```
-**请求参数**： `?page=1&page_size=20&provider=openai`
-**响应示例**：返回带有分页的 `ai_model_config` 列表树，见表设计。
+**QueryParams**：
+- `page` (int): 页码
+- `page_size` (int): 每页条数
+- `provider` (string): 提供商过滤
+- `is_enabled` (boolean): 状态过滤
+
+**响应示例**：
+```json
+{
+  "code": 200,
+  "data": {
+    "total": 50,
+    "items": [
+      {
+        "id": 1,
+        "model_key": "gpt-3.5-turbo",
+        "model_name": "GPT-3.5 Turbo",
+        "provider": "openai",
+        "is_enabled": true
+      }
+    ]
+  }
+}
+```
 
 ```http
 POST /api/v1/admin/ai/models/
 PUT /api/v1/admin/ai/models/{id}/
 ```
-**请求体**：包含 `model_key, model_name, provider...` 等全量配置。
-**响应**：成功保存的模型结构体。
+**请求体**：
+```json
+{
+  "model_key": "gpt-4",
+  "model_name": "GPT-4",
+  "provider": "openai",
+  "model_type": "gpt-4",
+  "is_enabled": true,
+  "max_tokens": 8000,
+  "temperature_default": 0.7,
+  "rate_limit_rpm": 60,
+  "allowed_roles": ["student", "teacher"]
+}
+```
+**响应**：
+```json
+{ "code": 200, "message": "保存成功" }
+```
 
 ```http
 POST /api/v1/admin/ai/models/{id}/toggle/
@@ -679,20 +693,51 @@ POST /api/v1/admin/ai/models/{id}/toggle/
 #### 2) API Key管理
 ```http
 GET /api/v1/admin/ai/api-keys/
+```
+**QueryParams**: `?provider=openai&is_active=true`
+**响应示例**：系统将脱敏并掩码真实的 `api_key_encrypted`，只暴露尾号供管理员辨识校验。
+
+```http
 POST /api/v1/admin/ai/api-keys/
 ```
-**安全说明**：保存将对传来的 key 通过 `AES-256` (结合环境 SECRET_KEY) 执行加密后落库。查询列表将**脱敏**隐藏真实的 `api_key_encrypted`，只显示后缀4位。
+**请求体**：
+```json
+{
+  "provider": "openai",
+  "key_name": "教学使用Key",
+  "api_key": "sk-********...",
+  "priority": 10,
+  "daily_token_limit": 1000000,
+  "monthly_token_limit": 50000000
+}
+```
+**安全说明**：基于系统变量 `SECRET_KEY` 以及 `AES-256` 算法进行对称加密入库落盘。
 
 ```http
 GET /api/v1/admin/ai/api-keys/{id}/usage/
 ```
-**说明**：返回该 Key 过去30天及每天详尽的 Token 开销日历。
+**响应示例**：
+```json
+{
+  "code": 200,
+  "data": {
+    "daily_usage": [{"date": "2024-03-01", "tokens": 15000}],
+    "monthly_total": 450000
+  }
+}
+```
 
 ```http
 POST /api/v1/admin/ai/api-keys/{id}/rotate/
 POST /api/v1/admin/ai/api-keys/{id}/disable/
 ```
-**轮换逻辑**：当选择 rotate 时，系统支持录入新 Key 替换旧 Key，旧 Key 的状态标记为 `is_active=false` 进行安全降级。如果当前正在有连接池使用旧 Key，其生命周期结束前依然可通信，新的请求路由将调度至新 Key，实现可用性平滑切换。
+**轮换请求体 (Rotate)**：
+```json
+{
+  "new_api_key": "sk-new789..."
+}
+```
+**轮换与平滑度策略**：提交 Rotate 后，插入新密匙实例并将旧实例标记为了 `is_active=false` 关闭新调度流入。如果旧密匙下仍有由于长文本而执行中未结束的会话套接字连接池存在，这些已有连接的生命周期结束之前都不受强制销毁影响。
 
 #### 3) 用户配额管理 (单点及批量)
 ```http
@@ -701,7 +746,17 @@ POST /api/v1/admin/ai/quotas/
 POST /api/v1/admin/ai/quotas/batch-set/
 POST /api/v1/admin/ai/quotas/{id}/reset/
 ```
-**时区逻辑**：`reset_at` 等日/月清零定时任务，全端严格使用 **UTC标准时间** 作为运算和对账基准，前端渲染根据浏览器时区自动 Localize。
+**批量下发配额请求体 (batch-set)**：
+```json
+{
+  "user_ids": [101, 102, 103],
+  "quota_type": "monthly",
+  "token_limit": 50000,
+  "reset_at": "2024-04-01T00:00:00Z"
+}
+```
+**重置配额 (reset) 响应**： `{"code": 200, "message": "成功重置限额"}`
+**时区逻辑**：包含每天归零或每月首日归零在内的 `reset_at` 参数与后端的账单结算CronJob，在全服务器生命周期下严格以 **UTC标准时间** 作为运算核校准星。各类报表与限制的前端渲染时再依照浏览器当地时区执行时间跨度的自动 Localize（本地化）平移修正。
 
 #### 4) 智能体配置
 ```http
@@ -709,17 +764,94 @@ GET /api/v1/admin/ai/agents/
 POST /api/v1/admin/ai/agents/
 POST /api/v1/admin/ai/agents/{id}/test/
 ```
-**响应**：对于 test 接口，后管直接发起沙盒评测返回对答耗时和分数。针对 `system_prompt` 的修改，提供内部的历史流转记录（如 `revision_id` 管理）。
+**说明与响应**：对于 `test` 接口，管理员能够提供提问参数进行连通性沙盒评测返回答案及其链路耗时跑分。
+
+```python
+# 引入 reversion 版本管理
+from reversion.models import Version
+
+# 历史回溯演示
+versions = Version.objects.get_for_object(agent_config)
+previous_version = versions[3]
+previous_version.revert()
+```
+
 
 #### 5) 知识库与全局统计 API
 ```http
 # 知识库管理
 GET /api/v1/admin/ai/knowledge/indexes/        # 查看全局文件索引队列
-POST /api/v1/admin/ai/knowledge/indexes/rebuild/ # 重新触发异常文档构建
+POST /api/v1/admin/ai/knowledge/indexes/rebuild/ # 基于 guidebook_id 重新触发异常文档构建
+```
 
+**知识库重建请求体**：
+```json
+{
+  "guidebook_ids": [1, 2, 3],
+  "force": true,
+  "clear_existing": false
+}
+```
+**知识库重建响应**：
+```json
+{
+  "code": 200,
+  "message": "已触发重建任务",
+  "data": {
+    "task_ids": ["task-uuid-1", "task-uuid-2", "task-uuid-3"],
+    "total": 3
+  }
+}
+```
+
+```http
 # 全局数据看板报表
 GET /api/v1/admin/ai/stats/overview/           # 包含整体Token，API调用次数，总成本等
 GET /api/v1/admin/ai/stats/usage-trend/        # 近30天每日使用趋势
+```
+
+**统计总览 (overview) 响应**：
+```json
+{
+  "code": 200,
+  "data": {
+    "total_tokens": 1500000,
+    "total_requests": 5200,
+    "total_cost_usd": 150.75,
+    "active_users": 320,
+    "model_distribution": [
+      {
+        "model_key": "gpt-3.5-turbo",
+        "usage_percent": 75.5,
+        "total_cost": 113.56
+      }
+    ],
+    "api_key_status": {
+      "total": 5,
+      "active": 4,
+      "error": 1
+    }
+  }
+}
+```
+
+**趋势统计 (usage-trend) 响应**：
+```json
+{
+  "code": 200,
+  "data": {
+    "period": "last_30_days",
+    "data_points": [
+      {
+        "date": "2024-02-01",
+        "tokens": 50000,
+        "requests": 180,
+        "cost": 5.20,
+        "active_users": 45
+      }
+    ]
+  }
+}
 ```
 
 ### 2.3.4 用户端 - 模型选择与配额接口
@@ -750,16 +882,40 @@ GET /api/v1/chat/models/available/
 ```http
 GET /api/v1/chat/my-quota/
 ```
-**响应示例**：返回用户的 daily 及 monthly 已用/总限额和下次重置 UTC 时间。
+**响应示例**：
+```json
+{
+  "code": 200,
+  "data": {
+    "daily": {
+      "limit": 10000,
+      "used": 1500,
+      "reset_at": "2024-03-11T00:00:00Z"
+    },
+    "monthly": {
+      "limit": 500000,
+      "used": 45000,
+      "reset_at": "2024-04-01T00:00:00Z"
+    }
+  }
+}
+```
 
 #### 3) 教师视角：旁路看护学生交互 (预留接口)
 ```http
 GET /api/v1/chat/teacher/students/{student_id}/conversations/
 GET /api/v1/chat/teacher/experiments/{experiment_id}/conversations/
 ```
-**请求参数**： `?page=1&page_size=20&status=active`
-**权限校验**：系统先反查该 `teacher_id` 当前是否有权查看参数中对应的学生或教授该实验节点。返回值等同于“获取对话详情” API 的结构，但在前端屏蔽 `回复` 与 `操作重试` 按钮。
-**审计防范**：无论是教师还是管理员提取敏感的对话明细以及管理端的操作（增删配额，导出Token账单等），操作全链路通过系统拦截器写入 **系统操作审计表 (SystemAuditLog)**。
+**请求参数**： 
+- `page` (int) 
+- `page_size` (int)
+- `status` (string, active/archived)
+
+**响应示例**：
+数据结构返回与标准的 `获取对话列表` 和 `获取消息历史` API 全然等同。
+  
+**权限限制**：此类调用首先反查传入的学生与试验的挂载，如果该 `teacher_id` 此时在实验排课系统中并无访问或该名学生不归属其负责，接口将直接 403 Forbidden 打回。
+**旁路限制规则**：返回给操作端的数据只被渲染为只读图层（强制解绑、遮蔽掉 `发送继续提问`, `重新生层`, 和 `意见反馈` 操作入口图标）。
 
 ------
 
@@ -1693,6 +1849,64 @@ def auto_summarize_conversation(conversation_id):
 
 ### 2.7.2 超限防护与用户配额系统
 
+对于配额系统日常扣减之外，需要配置异步常驻定时任务完成每日/每月的归零重置逻辑：
+
+```python
+# chat/tasks.py
+from celery import shared_task
+from celery.schedules import crontab
+from django.utils import timezone
+
+@shared_task
+def reset_daily_quotas():
+    """每日0点UTC重置日配额"""
+    now = timezone.now()
+    reset_count = AIUserQuota.objects.filter(
+        quota_type='daily',
+        reset_at__lte=now
+    ).update(
+        tokens_used=0,
+        reset_at=now + timezone.timedelta(days=1)
+    )
+    return reset_count
+
+@shared_task
+def reset_monthly_quotas():
+    """每月1日0点UTC重置月配额"""
+    now = timezone.now()
+    reset_count = AIUserQuota.objects.filter(
+        quota_type='monthly',
+        reset_at__lte=now
+    ).update(
+        tokens_used=0,
+        reset_at=now.replace(day=1) + timezone.timedelta(days=32).replace(day=1)
+    )
+    return reset_count
+
+@shared_task
+def reset_api_key_daily_usage():
+    """每日0点UTC重置API Key的日用量"""
+    AIApiKey.objects.all().update(daily_tokens_used=0)
+
+# chat/celery_config.py
+from celery.schedules import crontab
+
+app.conf.beat_schedule = {
+    'reset-daily-quotas': {
+        'task': 'chat.tasks.reset_daily_quotas',
+        'schedule': crontab(hour=0, minute=0),
+    },
+    'reset-monthly-quotas': {
+        'task': 'chat.tasks.reset_monthly_quotas',
+        'schedule': crontab(day_of_month=1, hour=0, minute=0),
+    },
+    'reset-api-key-daily': {
+        'task': 'chat.tasks.reset_api_key_daily_usage',
+        'schedule': crontab(hour=0, minute=5),
+    },
+}
+```
+
 ```python
 def get_ai_response_with_retry(conversation_id, question, max_retries=3):
     """带重试的AI响应"""
@@ -1886,6 +2100,11 @@ CREATE TABLE `ai_user_quota` (
   `tokens_used` bigint DEFAULT 0 COMMENT '已使用token',
   `reset_at` datetime COMMENT '重置时间',
   `is_active` boolean DEFAULT true COMMENT '是否启用',
+  `created_by_id` int(11) DEFAULT NULL COMMENT '创建人ID',
+  `updated_by_id` int(11) DEFAULT NULL COMMENT '更新人ID',
+  `owner_organization_id` int(11) DEFAULT NULL COMMENT '所属组织ID',
+  `is_deleted` tinyint(1) DEFAULT 0 COMMENT '软删除标志',
+  `remark` varchar(255) DEFAULT NULL COMMENT '备注',
   `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -1977,3 +2196,24 @@ AI助手模块的数据权限遵循以下设计：
     ```
 - **管理员权限**：
   - 拥有对全量会话记录、消耗统计等元数据的汇总管理权限。
+
+------
+
+## 2.10 错误码表
+
+| 错误码 | 说明 | 触发场景 | 前端处理建议 |
+|--------|------|----------|-------------|
+| 200 | 成功 | 标准调用正常完成 | 直接渲染 |
+| 400 | 参数错误 | 请求体或URL参数格式非法 | 提示字段报错 |
+| 401 | 未认证 | 未携带有效的会话Token或登录态丢失 | 跳转授权登录页 |
+| 403 | 无权限 | 尝试访问或者旁路无权代理的资源范围 | 提示权限不足 |
+| 402 | 配额不足 | User/每月 Token上限触顶 | 渲染充值/提额提示 |
+| 429 | 速率过载 | 系统触发 Token Bucket 或超出 TPM | 倒数重试/等待 |
+| 4001 | 模型不可用 | 被请求的模型关闭或并未配置 | 切换回基础兜底模型 |
+| 4002 | 网关熔断 | API Key 池被耗尽/外部网络严重阻塞 | 抛给运维中心接管 |
+| 4003 | 知识库缺失 | RAG索引查无此文档或切片未就绪 | 提示手动重构引导 |
+| 4004 | 会话丢失 | 无效的 `conversation_id` | 清空缓存构建新ID |
+| 4005 | 上下文挂载异常 | 缺少必要联调载体如 `experiment_id` | 刷新主视图树 |
+| 500 | 内部错误 | 后端发生通用抛出 | 上报监控仪 |
+| 5001 | LangChain执行失败 | Agent在生成思维链阶段出现解析异常 | 提供文字反馈回退 |
+| 5002 | 提供商通讯故障 | OpenAI 上游返回大端不可靠错误 | 设置为自动重试链路 |
