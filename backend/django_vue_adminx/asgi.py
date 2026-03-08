@@ -31,12 +31,11 @@ from channels.security.websocket import AllowedHostsOriginValidator
 django_asgi_app = get_asgi_application()
 
 # 导入WebSocket路由和JWT认证中间件
-from apps.chat.routing import websocket_urlpatterns as chat_websocket_urlpatterns
 from apps.pve.routing import websocket_urlpatterns as pve_websocket_urlpatterns
 from apps.common.middleware import JWTAuthMiddleware
 
 websocket_urlpatterns = (
-    chat_websocket_urlpatterns + pve_websocket_urlpatterns
+    pve_websocket_urlpatterns
 )
 
 application = ProtocolTypeRouter({

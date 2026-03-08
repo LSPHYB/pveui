@@ -31,6 +31,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 
 from .models import CourseAttachment, CourseExperiment, CourseGuidebook, CourseSubmission
+from apps.chat.models import AIKnowledgeIndexStatus
 from .serializers import (
     CourseAttachmentSerializer,
     CourseExperimentArchiveSerializer,
@@ -137,7 +138,9 @@ class ExperimentViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
-        return _ok(serializer.data, message='实验创建成功', status_code=status.HTTP_201_CREATED)
+        # 使用 DetailSerializer 返回响应，确保包含 id 等完整字段
+        detail = CourseExperimentDetailSerializer(serializer.instance, context={'request': request})
+        return _ok(detail.data, message='实验创建成功', status_code=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop('partial', False)
@@ -281,6 +284,21 @@ class ExperimentViewSet(viewsets.ModelViewSet):
             created_by=request.user,
             updated_by=request.user,
         )
+
+        # 初始化知识库向量化状态追踪记录
+        AIKnowledgeIndexStatus.objects.create(
+            guidebook=guidebook,
+            experiment=experiment,
+            status='pending',
+            chunk_num=0,
+            remark='',
+        )
+
+        # 触发异步重建任务
+        import threading
+        from apps.chat.tasks import rebuild_knowledge_indexes
+        threading.Thread(target=rebuild_knowledge_indexes, args=([guidebook.id],)).start()
+
         return _ok(
             CourseGuidebookListSerializer(guidebook, context={'request': request}).data,
             message='文档上传成功，正在处理...',

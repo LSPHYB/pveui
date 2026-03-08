@@ -173,7 +173,9 @@ const saveOrCreate = async (status: 'draft' | 'published' = 'draft') => {
   saving.value = true;
   try {
     const payload = { ...buildPayload(), status };
-    if (isEdit.value && experimentId.value) {
+    // 只要已有 experimentId（无论是编辑模式还是创建后首次保存得到的id），
+    // 一律走 PATCH 更新；否则才 POST 创建新实验
+    if (experimentId.value) {
       await updateExperimentApi(experimentId.value, payload);
       message.success('更新成功');
     } else {
@@ -183,7 +185,6 @@ const saveOrCreate = async (status: 'draft' | 'published' = 'draft') => {
     }
     return true;
   } catch (e: any) {
-    // RequestClient 抛出的是 response.data（{code, message}），直接取 e.message
     message.error(e?.message ?? '保存失败');
     return false;
   } finally {
@@ -241,7 +242,15 @@ const beforeUpload = (file: File) => {
 };
 
 const handleUploadConfirm = async () => {
-  if (!pendingUpload.value || !experimentId.value) return;
+  if (!pendingUpload.value) return;
+  // 兜底：若还没有实验ID（极端情况），先自动保存一次获取ID
+  if (!experimentId.value) {
+    const ok = await saveOrCreate('draft');
+    if (!ok || !experimentId.value) {
+      message.error('保存实验失败，无法上传指导书');
+      return;
+    }
+  }
   uploadingGuide.value = true;
   try {
     const fd = new FormData();
@@ -439,28 +448,7 @@ const guidebookColumns = [
 
       <!-- ───── Step 1: 上传指导书 ───── -->
       <div v-show="currentStep === 1">
-        <Alert
-          v-if="!experimentId"
-          type="warning"
-          class="mb-4"
-          show-icon
-        >
-          <template #message>
-            <span>请先完成基本信息并保存，才能上传指导书。</span>
-            <Button
-              type="link"
-              size="small"
-              :loading="saving"
-              style="padding: 0 4px"
-              @click="saveOrCreate('draft')"
-            >
-              点击重新保存
-            </Button>
-          </template>
-        </Alert>
-
         <Upload
-          v-if="experimentId"
           :before-upload="beforeUpload"
           :show-upload-list="false"
           accept=".pdf,.doc,.docx,.md,.mp4,.avi"

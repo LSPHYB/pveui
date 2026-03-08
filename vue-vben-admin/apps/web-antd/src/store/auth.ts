@@ -112,12 +112,32 @@ export const useAuthStore = defineStore('auth', () => {
     };
   }
 
+  // 防止 token 过期时 logoutApi 401 → doReAuthenticate → logout 无限循环
+  let isLoggingOut = false;
+
   async function logout(redirect: boolean = true) {
-    try {
-      await logoutApi();
-    } catch {
-      // 不做任何处理
+    // 如果已经正在登出，直接返回，避免无限循环
+    if (isLoggingOut) {
+      console.warn('[Logout] ⚠️ 已在登出流程中，跳过重复调用');
+      return;
     }
+    isLoggingOut = true;
+
+    try {
+      console.log('[Logout API] 🚪 正在退出登录...');
+      // 只有 accessToken 存在时才调用后端登出接口
+      // 若 token 已失效（由 doReAuthenticate 清空），跳过此调用以防无限循环
+      if (accessStore.accessToken) {
+        await logoutApi();
+      } else {
+        console.warn('[Logout API] ⚠️ accessToken 已失效，跳过后端登出请求');
+      }
+    } catch {
+      // 接口失败不影响本地登出流程
+    } finally {
+      isLoggingOut = false;
+    }
+
     resetAllStores();
     accessStore.setLoginExpired(false);
 
@@ -126,8 +146,8 @@ export const useAuthStore = defineStore('auth', () => {
       path: LOGIN_PATH,
       query: redirect
         ? {
-            redirect: encodeURIComponent(router.currentRoute.value.fullPath),
-          }
+          redirect: encodeURIComponent(router.currentRoute.value.fullPath),
+        }
         : {},
     });
   }

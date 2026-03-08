@@ -322,6 +322,73 @@ export async function getAllMenusApi() {
           },
         ],
       },
+      {
+        name: 'AI',
+        path: '/ai',
+        component: 'BasicLayout',
+        redirect: '/ai/dashboard',
+        meta: {
+          title: 'AI管理中心',
+          icon: 'lucide:bot',
+          order: 30,
+        },
+        children: [
+          {
+            name: 'AI_Dashboard',
+            path: '/ai/dashboard',
+            component: 'ai/dashboard/index',
+            meta: {
+              title: '数据大盘',
+              icon: 'lucide:area-chart',
+            },
+          },
+          {
+            name: 'AI_Models',
+            path: '/ai/models',
+            component: 'ai/models/index',
+            meta: {
+              title: '模型管理',
+              icon: 'lucide:cpu',
+            },
+          },
+          {
+            name: 'AI_ApiKeys',
+            path: '/ai/api-keys',
+            component: 'ai/api-keys/index',
+            meta: {
+              title: 'API密钥',
+              icon: 'lucide:key',
+            },
+          },
+          {
+            name: 'AI_Quotas',
+            path: '/ai/quotas',
+            component: 'ai/quotas/index',
+            meta: {
+              title: '额度分配',
+              icon: 'lucide:gauge',
+            },
+          },
+          {
+            name: 'AI_Agents',
+            path: '/ai/agents',
+            component: 'ai/agents/index',
+            meta: {
+              title: '智能体人设',
+              icon: 'lucide:brain',
+            },
+          },
+          {
+            name: 'AI_Knowledge',
+            path: '/ai/knowledge',
+            component: 'ai/knowledge/index',
+            meta: {
+              title: '知识库状态',
+              icon: 'lucide:library',
+            },
+          },
+        ],
+      },
     ];
 
     console.log('[Menu API] 💉 使用静态菜单:', staticMenus.length, '个');

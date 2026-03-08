@@ -21,6 +21,7 @@ import { openWindow } from '@vben/utils';
 import { $t } from '#/locales';
 import { useAuthStore } from '#/store';
 import LoginForm from '#/views/_core/authentication/login.vue';
+import AiChatDrawer from './components/AiChatDrawer.vue';
 
 const notifications = ref<NotificationItem[]>([
   {
@@ -198,6 +199,7 @@ watch(
       >
         <LoginForm />
       </AuthenticationLoginExpiredModal>
+      <AiChatDrawer />
     </template>
     <template #lock-screen>
       <LockScreen :avatar @to-login="handleLogout" />

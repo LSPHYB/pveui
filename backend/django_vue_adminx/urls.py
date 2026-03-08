@@ -38,8 +38,9 @@ urlpatterns = [
     path('api/v1/', include('apps.experiments.urls')),
 ]
 
-# 仅当定义了 MEDIA_ROOT 时才添加媒体文件映射（避免导入期 AttributeError）
-if hasattr(settings, 'MEDIA_ROOT') and settings.MEDIA_ROOT:
-    urlpatterns += [
-        re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
-]
+from django.conf.urls.static import static
+
+# 仅当定义了 MEDIA_ROOT 时才添加媒体文件映射
+if hasattr(settings, 'MEDIA_URL') and settings.MEDIA_URL:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
