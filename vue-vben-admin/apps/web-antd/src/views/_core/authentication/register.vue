@@ -81,9 +81,28 @@ const formSchema = computed((): VbenFormSchema[] => {
   ];
 });
 
-function handleSubmit(value: Recordable<any>) {
-  // eslint-disable-next-line no-console
-  console.log('register submit:', value);
+import { message } from 'ant-design-vue';
+import { useRouter } from 'vue-router';
+import { registerApi } from '#/api/core/auth';
+
+const router = useRouter();
+
+async function handleSubmit(value: Recordable<any>) {
+  try {
+    loading.value = true;
+    await registerApi({
+      username: value.username,
+      password: value.password,
+    });
+    message.success($t('authentication.registerSuccess') || '注册成功，请登录');
+    // 跳转回登录页
+    router.push('/login');
+  } catch (error: any) {
+    console.error('Register failed:', error);
+    // 错误信息由 request 拦截器统一处理，这里可增加特殊提示
+  } finally {
+    loading.value = false;
+  }
 }
 </script>
 

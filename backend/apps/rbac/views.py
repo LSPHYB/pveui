@@ -985,5 +985,46 @@ class DashboardView(APIView):
             'error_count': error_count,
             'top_paths': top_paths_data,
         }
-
         return Response(data)
+
+class RegisterView(APIView):
+    """用户自注册接口：无需登录，创建账号后自动赋予默认学生角色。
+
+    Request JSON: { "username": "...", "password": "..." }
+    Response JSON: { "detail": "注册成功，请登录" }
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        username = request.data.get('username', '').strip()
+        password = request.data.get('password', '')
+
+        # 基础校验
+        if not username or not password:
+            return Response({'detail': '用户名和密码不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(username) < 3:
+            return Response({'detail': '用户名至少3个字符'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(password) < 6:
+            return Response({'detail': '密码长度至少6位'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if User.objects.filter(username=username).exists():
+            return Response({'detail': '用户名已被注册，请换一个'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 创建用户
+        user = User.objects.create_user(username=username, password=password)
+        user.is_active = True
+        user.save()
+
+        # 自动赋予"学生"角色（code='student'，找不到则跳过）
+        try:
+            from .models import Role, UserRole
+            student_role = Role.objects.filter(code='student').first()
+            if student_role:
+                UserRole.objects.get_or_create(user=user, role=student_role)
+        except Exception:
+            pass
+
+        return Response({'detail': '注册成功，请登录'}, status=status.HTTP_201_CREATED)

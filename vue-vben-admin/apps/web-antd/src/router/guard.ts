@@ -65,8 +65,8 @@ function setupAccessGuard(router: Router) {
       if (to.path === LOGIN_PATH && accessStore.accessToken) {
         const redirectPath = decodeURIComponent(
           (to.query?.redirect as string) ||
-            userStore.userInfo?.homePath ||
-            preferences.app.defaultHomePath,
+          userStore.userInfo?.homePath ||
+          preferences.app.defaultHomePath,
         );
         console.log('[Guard] 🔀 已登录访问登录页，重定向到:', redirectPath);
         return redirectPath;
@@ -139,10 +139,31 @@ function setupAccessGuard(router: Router) {
         ? userInfo.homePath || preferences.app.defaultHomePath
         : to.fullPath)) as string;
 
-    console.log('[Guard] 🎯 最终重定向路径:', redirectPath);
-    console.log('[Guard] 🔀 执行重定向...');
+    console.log('[Guard] 🎯 初始重定向路径:', redirectPath);
 
-    const resolved = router.resolve(decodeURIComponent(redirectPath));
+    // 自动回退保护：如果重定向路径不在可访问路由里（比如学生没权限看 dashboard），则跳到第一个有权限的菜单
+    let finalRedirectPath = redirectPath;
+    const isRedirectAccessible = accessibleRoutes.some(
+      (route) => route.path === redirectPath || route.path === `/${redirectPath}`,
+    ) || coreRouteNames.includes(redirectPath as any);
+
+    if (!isRedirectAccessible && accessibleMenus && accessibleMenus.length > 0) {
+      // 提取第一个菜单的最深路径
+      let firstMenu: any = accessibleMenus[0];
+      if (firstMenu) {
+        while (firstMenu && firstMenu.children && firstMenu.children.length > 0) {
+          firstMenu = firstMenu.children[0];
+        }
+        if (firstMenu && firstMenu.path) {
+          finalRedirectPath = firstMenu.path;
+          console.log(`[Guard] ⚠️ 初始路径无权限，已回退到首个可用菜单: ${finalRedirectPath}`);
+        }
+      }
+    }
+
+    console.log('[Guard] 🔀 执行最终重定向...', finalRedirectPath);
+
+    const resolved = router.resolve(decodeURIComponent(finalRedirectPath));
     console.log('[Guard] 🔍 解析后的路由:', resolved);
 
     return {

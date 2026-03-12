@@ -20,6 +20,16 @@ export namespace AuthApi {
 }
 
 /**
+ * 注册 - 适配Django后端
+ */
+export async function registerApi(data: AuthApi.LoginParams) {
+  console.log('[Register API] 📤 发送注册请求:', { username: data.username });
+  const response = await baseRequestClient.post<any>('/rbac/auth/register/', data);
+  console.log('[Register API] 📥 后端原始响应:', response);
+  return response;
+}
+
+/**
  * 登录 - 适配Django后端
  */
 export async function loginApi(data: AuthApi.LoginParams) {
