@@ -187,6 +187,69 @@ class PVEAPIClient:
         """获取LXC容器配置。"""
         return self._request('GET', f'/nodes/{node}/lxc/{vmid}/config')
     
+    def get_vm_rrd(
+        self,
+        node: str,
+        vmid: int,
+        timeframe: str = 'hour',
+        cf: str = 'AVERAGE'
+    ) -> List[Dict]:
+        """
+        获取虚拟机的RRD监控数据。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            timeframe: 时间范围（hour、day、week、month、year）
+            cf: 聚合方式（AVERAGE、MAX、MIN）
+            
+        Returns:
+            RRD数据列表
+        """
+        params = {
+            'timeframe': timeframe or 'hour'
+        }
+        if cf:
+            params['cf'] = cf
+        result = self._request('GET', f'/nodes/{node}/qemu/{vmid}/rrddata', params=params)
+        if isinstance(result, list):
+            return result
+        elif isinstance(result, dict):
+            return [result]
+        return []
+
+    def get_container_rrd(
+        self,
+        node: str,
+        vmid: int,
+        timeframe: str = 'hour',
+        cf: str = 'AVERAGE'
+    ) -> List[Dict]:
+        """
+        获取LXC容器的RRD监控数据。
+        
+        Args:
+            node: 节点名称
+            vmid: 容器ID
+            timeframe: 时间范围（hour、day、week、month、year）
+            cf: 聚合方式（AVERAGE、MAX、MIN）
+            
+        Returns:
+            RRD数据列表
+        """
+        params = {
+            'timeframe': timeframe or 'hour'
+        }
+        if cf:
+            params['cf'] = cf
+        result = self._request('GET', f'/nodes/{node}/lxc/{vmid}/rrddata', params=params)
+        if isinstance(result, list):
+            return result
+        elif isinstance(result, dict):
+            return [result]
+        return []
+
+    
     def create_vnc_proxy(self, node: str, vmid: int, websocket: bool = True, generate_password: bool = True) -> Dict:
         """
         创建VNC代理会话，用于noVNC连接。
@@ -196,6 +259,19 @@ class PVEAPIClient:
             'generate-password': 1 if generate_password else 0
         }
         return self._request('POST', f'/nodes/{node}/qemu/{vmid}/vncproxy', params=params)
+
+    def create_lxc_vnc_proxy(self, node: str, vmid: int, websocket: bool = True) -> Dict:
+        """
+        创建LXC VNC代理会话，用于noVNC连接。
+        """
+        params = {
+            'websocket': 1 if websocket else 0,
+        }
+        return self._request('POST', f'/nodes/{node}/lxc/{vmid}/vncproxy', params=params)
+    
+    def create_lxc_console(self, node: str, vmid: int) -> Dict:
+        """创建LXC控制台会话（create_lxc_vnc_proxy的别名）。"""
+        return self.create_lxc_vnc_proxy(node, vmid, websocket=True)
     
     def update_vm_config(self, node: str, vmid: int, params: Dict) -> Dict:
         """
@@ -214,7 +290,7 @@ class PVEAPIClient:
         """更新LXC容器配置。"""
         if not params:
             raise ValueError("params 不能为空")
-        return self._request('POST', f'/nodes/{node}/lxc/{vmid}/config', params=params)
+        return self._request('PUT', f'/nodes/{node}/lxc/{vmid}/config', params=params)
     
     def create_vm(self, node: str, vmid: int, config: Dict) -> Dict:
         """
@@ -336,14 +412,53 @@ class PVEAPIClient:
         result = self._request('POST', f'/nodes/{node}/lxc/{vmid}/status/reboot')
         return result if isinstance(result, dict) else {}
     
-    def delete_vm(self, node: str, vmid: int) -> Dict:
-        """删除虚拟机。"""
-        result = self._request('DELETE', f'/nodes/{node}/qemu/{vmid}')
+    def suspend_vm(self, node: str, vmid: int) -> Dict:
+        """暂停虚拟机。"""
+        result = self._request('POST', f'/nodes/{node}/qemu/{vmid}/status/suspend')
+        return result if isinstance(result, dict) else {}
+
+    def resume_vm(self, node: str, vmid: int) -> Dict:
+        """恢复虚拟机。"""
+        result = self._request('POST', f'/nodes/{node}/qemu/{vmid}/status/resume')
         return result if isinstance(result, dict) else {}
     
-    def delete_container(self, node: str, vmid: int) -> Dict:
+    def reset_vm(self, node: str, vmid: int) -> Dict:
+        """重置虚拟机。"""
+        result = self._request('POST', f'/nodes/{node}/qemu/{vmid}/status/reset')
+        return result if isinstance(result, dict) else {}
+
+    def hibernate_vm(self, node: str, vmid: int) -> Dict:
+        """休眠虚拟机 (Suspend to Disk)。"""
+        # 休眠实际上是 suspend 操作加上 todisk=1 参数
+        params = {'todisk': 1}
+        result = self._request('POST', f'/nodes/{node}/qemu/{vmid}/status/suspend', params=params)
+        return result if isinstance(result, dict) else {}
+    
+    def delete_vm(self, node: str, vmid: int, purge: bool = False, destroy_status: bool = False) -> str:
+        """
+        删除虚拟机。
+        
+        Args:
+           node: 节点名称
+           vmid: 虚拟机ID
+           purge: 是否清除配置（包括磁盘）
+           destroy_status: 是否清除状态
+           
+        Returns:
+            UPID（任务ID）
+        """
+        params = {}
+        if purge:
+            params['purge'] = 1
+        if destroy_status:
+            params['destroy-status'] = 1
+            
+        result = self._request('DELETE', f'/nodes/{node}/qemu/{vmid}', params=params)
+        return result
+    
+    def delete_container(self, node: str, vmid: int, params: Dict = None) -> Dict:
         """删除LXC容器。"""
-        result = self._request('DELETE', f'/nodes/{node}/lxc/{vmid}')
+        result = self._request('DELETE', f'/nodes/{node}/lxc/{vmid}', params=params)
         return result if isinstance(result, dict) else {}
     def get_storage(self, node: str) -> List[Dict]:
         """获取存储列表。"""
@@ -531,5 +646,328 @@ class PVEAPIClient:
         if isinstance(result, list):
             # PVE 返回格式：[{"n": 行号, "t": "日志内容"}, ...]
             return [item.get('t', '') for item in result if isinstance(item, dict)]
-        return []
+
+    def get_resource_config(self, node: str, type: str, vmid: str) -> Dict:
+        """获取资源(VM/LXC)配置。"""
+        if type not in ['qemu', 'lxc']:
+           raise ValueError(f"Unknown resource type: {type}")
+        return self._request('GET', f'/nodes/{node}/{type}/{vmid}/config')
+
+    # ==================== 快照管理 ====================
+    
+    def list_snapshots(self, node: str, vmid: int) -> List[Dict]:
+        """
+        获取虚拟机快照列表。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            
+        Returns:
+            快照列表
+        """
+        result = self._request('GET', f'/nodes/{node}/qemu/{vmid}/snapshot')
+        return result if isinstance(result, list) else [result] if result else []
+    
+    def get_snapshot_config(self, node: str, vmid: int, snapname: str) -> Dict:
+        """
+        获取快照配置信息。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            snapname: 快照名称
+            
+        Returns:
+            快照配置
+        """
+        return self._request('GET', f'/nodes/{node}/qemu/{vmid}/snapshot/{snapname}/config')
+    
+    def create_snapshot(self, node: str, vmid: int, name: str, 
+                       description: str = '', include_memory: bool = False) -> str:
+        """
+        创建虚拟机快照。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            name: 快照名称
+            description: 快照描述
+            include_memory: 是否包含内存状态
+            
+        Returns:
+            任务UPID
+        """
+        data = {
+            'snapname': name,
+            'description': description,
+        }
+        if include_memory:
+            data['vmstate'] = 1
+        
+        return self._request('POST', f'/nodes/{node}/qemu/{vmid}/snapshot', data=data)
+    
+    def update_snapshot(self, node: str, vmid: int, snapname: str, description: str) -> None:
+        """
+        更新快照描述/备注。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            snapname: 快照名称
+            description: 新的描述
+        """
+        data = {'description': description}
+        return self._request('PUT', f'/nodes/{node}/qemu/{vmid}/snapshot/{snapname}/config', data=data)
+    
+    def rollback_snapshot(self, node: str, vmid: int, snapname: str) -> str:
+        """
+        回滚到指定快照。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            snapname: 快照名称
+            
+        Returns:
+            任务UPID
+        """
+        return self._request('POST', f'/nodes/{node}/qemu/{vmid}/snapshot/{snapname}/rollback')
+    
+    def delete_snapshot(self, node: str, vmid: int, snapname: str, force: bool = False) -> str:
+        """
+        删除快照。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            snapname: 快照名称
+            force: 是否强制删除
+            
+        Returns:
+            任务UPID
+        """
+        params = {}
+        if force:
+            params['force'] = 1
+        
+        return self._request('DELETE', f'/nodes/{node}/qemu/{vmid}/snapshot/{snapname}', params=params)
+    
+    # ==================== 备份管理 ====================
+    
+    def create_backup(self, node: str, vmid: int, storage: str, 
+                     mode: str = 'snapshot', compress: str = 'zstd',
+                     remove: bool = False, notes: str = '') -> str:
+        """
+        创建虚拟机备份。
+        
+        Args:
+            node: 节点名称
+            vmid: 虚拟机ID
+            storage: 存储位置
+            mode: 备份模式 (snapshot/suspend/stop)
+            compress: 压缩算法 (zstd/lzo/gzip/0)
+            remove: 是否在备份后删除
+            notes: 备份备注
+            
+        Returns:
+            任务UPID
+        """
+        data = {
+            'vmid': vmid,
+            'storage': storage,
+            'mode': mode,
+            'compress': compress,
+        }
+        if remove:
+            data['remove'] = 1
+        if notes:
+            data['notes-template'] = notes
+            
+        return self._request('POST', f'/nodes/{node}/vzdump', data=data)
+    
+    def delete_backup(self, node: str, storage: str, volid: str) -> str:
+        """
+        删除备份文件。
+        
+        Args:
+            node: 节点名称
+            storage: 存储名称
+            volid: 卷ID
+            
+        Returns:
+            任务UPID
+        """
+        return self._request('DELETE', f'/nodes/{node}/storage/{storage}/content/{volid}')
+    
+    def update_backup_notes(self, node: str, storage: str, volid: str, notes: str) -> None:
+        """
+        更新备份备注。
+        
+        Args:
+            node: 节点名称
+            storage: 存储名称
+            volid: 卷ID
+            notes: 备注内容
+        """
+        data = {'notes': notes}
+        return self._request('PUT', f'/nodes/{node}/storage/{storage}/content/{volid}', data=data)
+    
+    def update_backup_protection(self, node: str, storage: str, volid: str, protected: bool) -> None:
+        """
+        更新备份保护状态。
+        
+        Args:
+            node: 节点名称
+            storage: 存储名称
+            volid: 卷ID
+            protected: 是否保护
+        """
+        data = {'protected': 1 if protected else 0}
+        return self._request('PUT', f'/nodes/{node}/storage/{storage}/content/{volid}', data=data)
+    
+    def restore_backup(self, node: str, vmid: int, storage: str, archive: str, 
+                      force: bool = False, unique: bool = False) -> str:
+        """
+        还原备份。
+        
+        Args:
+            node: 节点名称
+            vmid: 目标虚拟机ID
+            storage: 存储位置
+            archive: 备份文件路径
+            force: 是否强制覆盖
+            unique: 是否使用唯一ID
+            
+        Returns:
+            任务UPID
+        """
+        data = {
+            'vmid': vmid,
+            'archive': archive,
+            'storage': storage,
+        }
+        if force:
+            data['force'] = 1
+        if unique:
+            data['unique'] = 1
+            
+        return self._request('POST', f'/nodes/{node}/qemu', data=data)
+
+    # ==================== LXC 快照管理 ====================
+
+    def list_container_snapshots(self, node: str, vmid: int) -> List[Dict]:
+        """获取LXC容器快照列表。"""
+        result = self._request('GET', f'/nodes/{node}/lxc/{vmid}/snapshot')
+        return result if isinstance(result, list) else [result] if result else []
+
+    def create_container_snapshot(self, node: str, vmid: int, name: str, 
+                                 description: str = '') -> str:
+        """创建LXC容器快照。"""
+        # 验证快照名称：不能是纯数字
+        if not name or not isinstance(name, str):
+            raise ValueError("快照名称不能为空")
+        
+        # PVE 要求快照名称不能是纯数字
+        if name.isdigit():
+            raise ValueError("快照名称不能是纯数字，请使用包含字母的名称（例如：snap123 或 snapshot-1）")
+        
+        # 检查名称是否符合 PVE 配置 ID 格式（字母开头，可包含字母、数字、下划线、连字符）
+        import re
+        if not re.match(r'^[a-zA-Z][a-zA-Z0-9_-]*$', name):
+            raise ValueError("快照名称必须以字母开头，只能包含字母、数字、下划线和连字符")
+        
+        data = {
+            'snapname': name,
+            'description': description or '',
+        }
+        return self._request('POST', f'/nodes/{node}/lxc/{vmid}/snapshot', data=data)
+
+    def update_container_snapshot(self, node: str, vmid: int, snapname: str, description: str) -> None:
+        """更新LXC容器快照描述。"""
+        data = {'description': description}
+        return self._request('PUT', f'/nodes/{node}/lxc/{vmid}/snapshot/{snapname}/config', data=data)
+
+    def rollback_container_snapshot(self, node: str, vmid: int, snapname: str) -> str:
+        """回滚LXC容器快照。"""
+        return self._request('POST', f'/nodes/{node}/lxc/{vmid}/snapshot/{snapname}/rollback')
+
+    def delete_container_snapshot(self, node: str, vmid: int, snapname: str, force: bool = False) -> str:
+        """删除LXC容器快照。"""
+        params = {}
+        if force:
+            params['force'] = 1
+        return self._request('DELETE', f'/nodes/{node}/lxc/{vmid}/snapshot/{snapname}', params=params)
+
+    def restore_container(self, node: str, vmid: int, storage: str, archive: str, 
+                         force: bool = False, unique: bool = False) -> str:
+        """
+        还原LXC容器备份。
+        """
+        data = {
+            'vmid': vmid,
+            'ostemplate': archive,
+            'storage': storage,
+            'restore': 1
+        }
+        if force:
+            data['force'] = 1
+        if unique:
+            data['unique'] = 1
+            
+        return self._request('POST', f'/nodes/{node}/lxc', data=data)
+    
+    def clone_container(self, node: str, vmid: int, newid: int, 
+                       hostname: str = None, description: str = None,
+                       full: bool = True, pool: str = None,
+                       snapname: str = None, storage: str = None,
+                       target: str = None) -> str:
+        """
+        克隆LXC容器。
+        
+        Args:
+            node: 节点名称
+            vmid: 源容器ID
+            newid: 新容器ID
+            hostname: 新容器主机名
+            description: 描述
+            full: 是否完整克隆（True）或链接克隆（False）
+            pool: 资源池
+            snapname: 基于指定快照克隆
+            storage: 目标存储
+            target: 目标节点（跨节点克隆）
+            
+        Returns:
+            任务UPID
+        """
+        params = {
+            'newid': newid,
+        }
+        
+        if hostname:
+            params['hostname'] = hostname
+        if description:
+            params['description'] = description
+        if full is not None:
+            params['full'] = 1 if full else 0
+        if pool:
+            params['pool'] = pool
+        if snapname:
+            params['snapname'] = snapname
+        if storage:
+            params['storage'] = storage
+        if target:
+            params['target'] = target
+            
+        return self._request('POST', f'/nodes/{node}/lxc/{vmid}/clone', params=params)
+    
+    def convert_to_template(self, node: str, vmid: int) -> None:
+        """
+        将LXC容器转换为模板。
+        
+        Args:
+            node: 节点名称
+            vmid: 容器ID
+        """
+        return self._request('POST', f'/nodes/{node}/lxc/{vmid}/template')
 

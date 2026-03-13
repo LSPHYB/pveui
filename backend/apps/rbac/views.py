@@ -13,7 +13,117 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django_filters.rest_framework import DjangoFilterBackend
 from apps.common.pagination import LargePageSizePagination
-from .models import Menu, Permission, Role, UserRole, Organization, UserOrganization
+from .models import Menu, Permission, Role, UserRole, Organization, UserOrganization, UserProfile
+
+# ... (omitted imports)
+
+class UserInfoView(APIView):
+    """获取当前用户信息：基本信息、角色、权限、主组织、扩展信息。"""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):  # noqa: D401
+        user = request.user
+        role_qs = Role.objects.filter(user_roles__user=user).distinct()
+        perm_qs = Permission.objects.filter(roles__in=role_qs, is_active=True).distinct()
+
+        # 获取主组织
+        primary_org = None
+        try:
+            uo = UserOrganization.objects.filter(user=user, is_primary=True).select_related('organization').first()
+            if uo:
+                primary_org = {
+                    "id": uo.organization.id,
+                    "name": uo.organization.name,
+                    "code": uo.organization.code,
+                }
+        except Exception:
+            pass
+
+        # 获取扩展信息 (UserProfile)
+        # 注意: signals保证了profile存在，但旧数据可能没有，这里做个防护
+        profile = getattr(user, 'profile', None)
+        avatar = None
+        biography = ''
+        if profile:
+            if profile.avatar:
+                try:
+                    avatar = request.build_absolute_uri(profile.avatar.url)
+                except Exception:
+                    pass
+            biography = profile.biography
+
+        data = {
+            "id": user.id,
+            "username": getattr(user, 'username', ''),
+            "email": getattr(user, 'email', ''),
+            "first_name": getattr(user, 'first_name', ''),
+            "last_name": getattr(user, 'last_name', ''),
+            "is_superuser": user.is_superuser,
+            "roles": list(role_qs.values('id', 'name', 'code')),
+            "permissions": list(perm_qs.values_list('code', flat=True)),
+            "primary_organization": primary_org,
+            "avatar": avatar,
+            "biography": biography,
+        }
+        return Response(data)
+
+    def patch(self, request):
+        """更新当前用户信息（支持基本资料、头像、简介）。"""
+        user = request.user
+        data = request.data
+        
+        # 1. 更新基本字段
+        allowed_fields = ['first_name', 'last_name', 'email']
+        has_user_change = False
+        
+        for field in allowed_fields:
+            if field in data:
+                setattr(user, field, data.get(field))
+                has_user_change = True
+                
+        if has_user_change:
+            user.save()
+
+        # 2. 更新 UserProfile (biography)
+        # 确保 profile 存在
+        if not hasattr(user, 'profile'):
+            UserProfile.objects.create(user=user)
+            user.refresh_from_db()
+
+        profile = user.profile
+        has_profile_change = False
+
+        if 'biography' in data:
+            profile.biography = data.get('biography')
+            has_profile_change = True
+        
+        # 3. 更新头像 (request.FILES)
+        avatar_file = request.FILES.get('avatar')
+        if avatar_file:
+            profile.avatar = avatar_file
+            has_profile_change = True
+        
+        if has_profile_change:
+            profile.save()
+
+        # 重新构建返回数据
+        avatar_url = None
+        if profile.avatar:
+            try:
+                avatar_url = request.build_absolute_uri(profile.avatar.url)
+            except Exception:
+                pass
+
+        return Response({"detail": "更新成功", "user": {
+            "id": user.id,
+            "username": getattr(user, 'username', ''),
+            "email": getattr(user, 'email', ''),
+            "first_name": getattr(user, 'first_name', ''),
+            "last_name": getattr(user, 'last_name', ''),
+            "biography": profile.biography,
+            "avatar": avatar_url,
+        }})
 import platform
 import os
 import time
@@ -468,40 +578,7 @@ class LogoutView(APIView):
         return Response({"detail": "退出成功"})
 
 
-class UserInfoView(APIView):
-    """获取当前用户信息：基本信息、角色、权限、主组织。"""
 
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get(self, request):  # noqa: D401
-        user = request.user
-        role_qs = Role.objects.filter(user_roles__user=user).distinct()
-        perm_qs = Permission.objects.filter(roles__in=role_qs, is_active=True).distinct()
-
-        # 获取主组织
-        primary_org = None
-        try:
-            from .models import UserOrganization
-            uo = UserOrganization.objects.filter(user=user, is_primary=True).select_related('organization').first()
-            if uo:
-                primary_org = {
-                    "id": uo.organization.id,
-                    "name": uo.organization.name,
-                    "code": uo.organization.code,
-                }
-        except Exception:
-            pass
-
-        data = {
-            "id": user.id,
-            "username": getattr(user, 'username', ''),
-            "email": getattr(user, 'email', ''),
-            "is_superuser": user.is_superuser,
-            "roles": list(role_qs.values('id', 'name', 'code')),
-            "permissions": list(perm_qs.values_list('code', flat=True)),
-            "primary_organization": primary_org,
-        }
-        return Response(data)
 
 
 class CheckPermissionView(APIView):
@@ -908,5 +985,46 @@ class DashboardView(APIView):
             'error_count': error_count,
             'top_paths': top_paths_data,
         }
-
         return Response(data)
+
+class RegisterView(APIView):
+    """用户自注册接口：无需登录，创建账号后自动赋予默认学生角色。
+
+    Request JSON: { "username": "...", "password": "..." }
+    Response JSON: { "detail": "注册成功，请登录" }
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        username = request.data.get('username', '').strip()
+        password = request.data.get('password', '')
+
+        # 基础校验
+        if not username or not password:
+            return Response({'detail': '用户名和密码不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(username) < 3:
+            return Response({'detail': '用户名至少3个字符'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(password) < 6:
+            return Response({'detail': '密码长度至少6位'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if User.objects.filter(username=username).exists():
+            return Response({'detail': '用户名已被注册，请换一个'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 创建用户
+        user = User.objects.create_user(username=username, password=password)
+        user.is_active = True
+        user.save()
+
+        # 自动赋予"学生"角色（code='student'，找不到则跳过）
+        try:
+            from .models import Role, UserRole
+            student_role = Role.objects.filter(code='student').first()
+            if student_role:
+                UserRole.objects.get_or_create(user=user, role=student_role)
+        except Exception:
+            pass
+
+        return Response({'detail': '注册成功，请登录'}, status=status.HTTP_201_CREATED)

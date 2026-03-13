@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'apps.chat.apps.ChatConfig',
     'apps.system.apps.SystemConfig',
     'apps.pve.apps.PveConfig',
+    'apps.experiments.apps.ExperimentsConfig',
 ]
 
 MIDDLEWARE = [

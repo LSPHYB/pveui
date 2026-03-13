@@ -96,6 +96,13 @@ class LXCContainer(BaseAuditModel):
     memory_mb = models.IntegerField(default=512, verbose_name='内存(MB)')
     disk_gb = models.IntegerField(default=10, verbose_name='磁盘(GB)')
     ip_address = models.CharField(max_length=255, blank=True, default='', verbose_name='IP地址', help_text='容器IP地址')
+    ssh_password = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        verbose_name='SSH密码',
+        help_text='容器root用户SSH密码（建议加密存储或使用环境变量）'
+    )
     description = models.TextField(blank=True, default='', verbose_name='描述', help_text='容器描述信息')
     pve_config = models.JSONField(default=dict, verbose_name='PVE配置', help_text='PVE中的完整配置信息（JSON格式）')
     

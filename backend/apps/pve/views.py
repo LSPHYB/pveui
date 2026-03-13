@@ -15,6 +15,7 @@ from django.db import transaction
 
 from apps.common.viewsets import ActionSerializerMixin
 from apps.common.mixins import AuditOwnerPopulateMixin
+from apps.common.data_mixins import DataScopeFilterMixin
 from django.core.cache import cache
 from django.conf import settings
 from django.http import HttpResponseBadRequest, HttpResponseNotFound, FileResponse, Http404
@@ -37,15 +38,22 @@ from .serializers import (
     VirtualMachineHardwareUpdateSerializer,
     VMOptionsUpdateSerializer,
     VMBackupCreateSerializer,
+    VMBackupRestoreSerializer,
+    VMBackupDeleteSerializer,
+    VMBackupNotesSerializer,
+    VMBackupProtectionSerializer,
     VMSnapshotCreateSerializer,
     VMSnapshotActionSerializer,
+    VMSnapshotUpdateSerializer,
     VMCloneSerializer,
     NetworkTopologyListSerializer,
     NetworkTopologyDetailSerializer,
     NetworkTopologySaveSerializer,
     LXCContainerListSerializer,
     LXCContainerDetailSerializer,
+    LXCContainerCreateSerializer,
     LXCContainerActionSerializer,
+    LXCContainerCloneSerializer,
 )
 from .pve_client import PVEAPIClient
 from .consumers import SESSION_CACHE_PREFIX
@@ -55,7 +63,7 @@ PVE_CONSOLE_SESSION_TTL = getattr(settings, 'PVE_CONSOLE_SESSION_TTL', 60)
 NOVNC_ASSETS_DIR = Path(__file__).resolve().parents[2] / 'templates' / 'novnc-pve'
 
 
-class PVEServerViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
+class PVEServerViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
     """PVE服务器CRUD视图集。"""
     
     queryset = PVEServer.objects.all().order_by('name')
@@ -258,6 +266,52 @@ class PVEServerViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.
             return Response({
                 'detail': f'获取网络接口失败: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'], url_path='nodes/(?P<node>[^/.]+)/qemu')
+    def node_qemu(self, request, pk=None, node=None):
+        """获取节点QEMU虚拟机列表。"""
+        server = self.get_object()
+        try:
+            client = PVEAPIClient(
+                host=server.host, port=server.port,
+                token_id=server.token_id, token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            vms = client.get_vms(node) # Reusing get_vms which fetches qemu
+            return Response(vms)
+        except Exception as e:
+             return Response({'detail': f'获取VM列表失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'], url_path='nodes/(?P<node>[^/.]+)/lxc')
+    def node_lxc(self, request, pk=None, node=None):
+        """获取节点LXC容器列表。"""
+        server = self.get_object()
+        try:
+            client = PVEAPIClient(
+                host=server.host, port=server.port,
+                token_id=server.token_id, token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            # Assuming client has get_lxcs or we use generic get
+            lxcs = client.get_lxc_containers(node)
+            return Response(lxcs)
+        except Exception as e:
+             return Response({'detail': f'获取LXC列表失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'], url_path='nodes/(?P<node>[^/.]+)/(?P<type>qemu|lxc)/(?P<vmid>[^/.]+)/config')
+    def node_resource_config(self, request, pk=None, node=None, type=None, vmid=None):
+        """获取资源(VM/LXC)配置。"""
+        server = self.get_object()
+        try:
+            client = PVEAPIClient(
+                host=server.host, port=server.port,
+                token_id=server.token_id, token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            config = client.get_resource_config(node, type, vmid)
+            return Response(config)
+        except Exception as e:
+             return Response({'detail': f'获取配置失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=False, methods=['get'], url_path='global-tasks')
     def global_tasks(self, request):
@@ -599,7 +653,7 @@ class PVEServerViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.
         return alerts
 
 
-class VirtualMachineViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
+class VirtualMachineViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
     """虚拟机CRUD视图集。"""
     
     queryset = VirtualMachine.objects.all().order_by('-created_at')
@@ -612,6 +666,55 @@ class VirtualMachineViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, view
     filterset_fields = ['server', 'status', 'node']
     search_fields = ['name', 'vmid', 'ip_address']
     ordering_fields = ['id', 'vmid', 'name', 'created_at']
+    
+    def destroy(self, request, *args, **kwargs):
+        """删除虚拟机（同时也从PVE中删除）。"""
+        instance = self.get_object()
+        server = instance.server
+        node = instance.node
+        vmid = instance.vmid
+        
+        purge = request.query_params.get('purge', 'false').lower() == 'true'
+        
+        try:
+            # 1. 连接PVE
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            
+            # 2. 检查虚拟机状态
+            try:
+                vm_status = client.get_vm_status(node, vmid)
+                if vm_status.get('status') == 'running':
+                     return Response({
+                        'detail': '虚拟机正在运行，请先停止'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            except Exception:
+                # 如果无法获取状态，可能虚拟机已经不存在，继续尝试删除
+                pass
+
+            # 3. 调用PVE API删除
+            # purge=True 会删除关联的磁盘
+            client.delete_vm(node, vmid, purge=purge)
+            
+            # 4. 删除数据库记录
+            self.perform_destroy(instance)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+            
+        except Exception as e:
+            # 如果是404错误(虚拟机在PVE上不存在)，我们也应该允许删除数据库记录
+            if '404' in str(e) or 'does not exist' in str(e):
+                self.perform_destroy(instance)
+                return Response(status=status.HTTP_204_NO_CONTENT)
+                
+            logger.exception(f'删除虚拟机失败: {vmid}')
+            return Response({
+                'detail': f'删除虚拟机失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=False, methods=['post'])
     def create_vm(self, request):
@@ -784,6 +887,18 @@ class VirtualMachineViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, view
             elif action_type == 'reboot':
                 result = client.reboot_vm(vm.node, vm.vmid)
                 vm.status = 'running'
+            elif action_type == 'suspend':
+                result = client.suspend_vm(vm.node, vm.vmid)
+                vm.status = 'paused'
+            elif action_type == 'resume':
+                result = client.resume_vm(vm.node, vm.vmid)
+                vm.status = 'running'
+            elif action_type == 'reset':
+                result = client.reset_vm(vm.node, vm.vmid)
+                vm.status = 'running'
+            elif action_type == 'hibernate':
+                result = client.hibernate_vm(vm.node, vm.vmid)
+                vm.status = 'stopped' # Hibernate effectively stops the VM (saves state to disk)
             else:
                 return Response({
                     'detail': f'不支持的操作: {action_type}'
@@ -848,6 +963,91 @@ class VirtualMachineViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, view
             logger.exception('更新虚拟机硬件配置失败')
             return Response({
                 'detail': f'更新虚拟机硬件配置失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['get'], url_path='status/current')
+    def status_current(self, request, pk=None):
+        """获取虚拟机实时状态信息。"""
+        vm = self.get_object()
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            status_info = client.get_vm_status(vm.node, vm.vmid)
+            return Response(status_info)
+        except Exception as e:
+            logger.exception('获取虚拟机状态失败')
+            return Response({
+                'detail': f'获取虚拟机状态失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['get'])
+    def rrddata(self, request, pk=None):
+        """获取虚拟机RRD监控数据。"""
+        vm = self.get_object()
+        timeframe = request.query_params.get('timeframe', 'hour')
+        cf = 'AVERAGE'
+        
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            rrd_data = client.get_vm_rrd(vm.node, vm.vmid, timeframe=timeframe, cf=cf)
+            return Response(rrd_data if isinstance(rrd_data, list) else [])
+        except Exception as e:
+            logger.exception('获取RRD数据失败')
+            return Response({
+                'detail': f'获取RRD数据失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['get', 'put'])
+    def config(self, request, pk=None):
+        """获取或更新虚拟机配置。"""
+        vm = self.get_object()
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            if request.method.upper() == 'GET':
+                config = client.get_vm_config(vm.node, vm.vmid)
+                vm.pve_config = config
+                vm.save(update_fields=['pve_config'])
+                return Response({'config': config})
+            else:  # PUT
+                params = request.data.get('params', {})
+                if not params:
+                    return Response({
+                        'detail': '缺少需要更新的配置参数'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                result = client.update_vm_config(vm.node, vm.vmid, params)
+                config = client.get_vm_config(vm.node, vm.vmid)
+                vm.pve_config = config
+                vm.save(update_fields=['pve_config'])
+                return Response({
+                    'success': True,
+                    'message': '配置更新已提交',
+                    'upid': result,
+                    'config': config
+                })
+        except Exception as e:
+            logger.exception('处理虚拟机配置请求失败')
+            return Response({
+                'detail': f'处理虚拟机配置请求失败: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['get', 'post'])
@@ -1118,6 +1318,139 @@ class VirtualMachineViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, view
                 'detail': f'创建备份失败: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(detail=True, methods=['post'])
+    def restore_backup(self, request, pk=None):
+        """还原备份到虚拟机。"""
+        vm = self.get_object()
+        serializer = VMBackupRestoreSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            # 还原备份
+            result = client.restore_backup(
+                vm.node,
+                vm.vmid,
+                data['storage'],
+                data['archive'],
+                force=data.get('force', False),
+                unique=data.get('unique', False)
+            )
+            return Response({
+                'success': True,
+                'upid': result,
+                'message': '备份还原任务已提交'
+            })
+        except Exception as e:
+            logger.exception('还原备份失败')
+            return Response({
+                'detail': f'还原备份失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def delete_backup(self, request, pk=None):
+        """删除备份文件。"""
+        vm = self.get_object()
+        serializer = VMBackupDeleteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            # 删除备份
+            result = client.delete_backup(
+                vm.node,
+                data['storage'],
+                data['volid']
+            )
+            return Response({
+                'success': True,
+                'upid': result,
+                'message': '备份已删除'
+            })
+        except Exception as e:
+            logger.exception('删除备份失败')
+            return Response({
+                'detail': f'删除备份失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def update_backup_notes(self, request, pk=None):
+        """更新备份备注。"""
+        vm = self.get_object()
+        serializer = VMBackupNotesSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            client.update_backup_notes(
+                vm.node,
+                data['storage'],
+                data['volid'],
+                data['notes']
+            )
+            return Response({
+                'success': True,
+                'message': '备份备注已更新'
+            })
+        except Exception as e:
+            logger.exception('更新备份备注失败')
+            return Response({
+                'detail': f'更新备份备注失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def update_backup_protection(self, request, pk=None):
+        """更新备份保护状态。"""
+        vm = self.get_object()
+        serializer = VMBackupProtectionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            client.update_backup_protection(
+                vm.node,
+                data['storage'],
+                data['volid'],
+                data['protected']
+            )
+            return Response({
+                'success': True,
+                'message': f'备份已{"启用" if data["protected"] else "禁用"}保护'
+            })
+        except Exception as e:
+            logger.exception('更新备份保护状态失败')
+            return Response({
+                'detail': f'更新备份保护状态失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
     @action(detail=True, methods=['get'])
     def snapshots(self, request, pk=None):
         """获取虚拟机快照列表。"""
@@ -1246,6 +1579,33 @@ class VirtualMachineViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, view
             logger.exception('删除快照失败')
             return Response({
                 'detail': f'删除快照失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def update_snapshot(self, request, pk=None):
+        """更新快照描述/备注。"""
+        vm = self.get_object()
+        serializer = VMSnapshotUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = vm.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            client.update_snapshot(vm.node, vm.vmid, data['name'], data['description'])
+            return Response({
+                'success': True,
+                'message': '快照描述已更新'
+            })
+        except Exception as e:
+            logger.exception('更新快照描述失败')
+            return Response({
+                'detail': f'更新快照描述失败: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['get'])
@@ -1389,7 +1749,9 @@ class VirtualMachineViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, view
                     return ''
             return ''
         
+
         for server in servers_qs:
+            seen_vmids = []
             try:
                 client = PVEAPIClient(
                     host=server.host,
@@ -1418,6 +1780,7 @@ class VirtualMachineViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, view
                     vmid = vm_info.get('vmid') or vm_info.get('vmid')
                     try:
                         vmid = int(vmid)
+                        seen_vmids.append(vmid)
                     except (TypeError, ValueError):
                         continue
                     
@@ -1476,6 +1839,11 @@ class VirtualMachineViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, view
                             summary['created'] += 1
                         else:
                             summary['updated'] += 1
+            
+            # 删除不存在的虚拟机
+            if seen_vmids:
+                deleted_count, _ = VirtualMachine.objects.filter(server=server).exclude(vmid__in=seen_vmids).delete()
+                # 如果有删除计数，可以记录到日志或者 summary（可选）
         
         return Response(summary)
     
@@ -1525,7 +1893,7 @@ class VirtualMachineViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, view
             }, status=status.HTTP_400_BAD_REQUEST)
 
 
-class LXCContainerViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
+class LXCContainerViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
     """LXC容器管理视图集。"""
     
     queryset = LXCContainer.objects.all().order_by('-created_at')
@@ -1538,6 +1906,145 @@ class LXCContainerViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewse
     filterset_fields = ['server', 'status', 'node']
     search_fields = ['name', 'vmid', 'ip_address']
     ordering_fields = ['id', 'vmid', 'name', 'created_at']
+    
+    def destroy(self, request, *args, **kwargs):
+        """删除LXC容器（同时也从PVE中删除）。"""
+        instance = self.get_object()
+        server = instance.server
+        node = instance.node
+        vmid = instance.vmid
+        
+        # 获取可选参数
+        purge = request.query_params.get('purge', 'false').lower() == 'true'
+        destroy_unreferenced = request.query_params.get('destroy-unreferenced-disks', 'false').lower() == 'true'
+
+        try:
+            # 1. 连接PVE
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            
+            # 2. 检查容器状态
+            try:
+                vm_status = client.get_container_status(node, vmid)
+                if vm_status.get('status') == 'running':
+                     return Response({
+                        'detail': '容器正在运行，请先停止'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            except Exception:
+                # 如果无法获取状态，可能容器已经不存在，继续尝试删除
+                pass
+
+            # 3. 调用PVE API删除
+            params = {}
+            if purge:
+                params['purge'] = 1
+            if destroy_unreferenced:
+                params['destroy-unreferenced-disks'] = 1
+                
+            client.delete_container(node, vmid, params=params)
+            
+            # 4. 删除数据库记录
+            self.perform_destroy(instance)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+            
+        except Exception as e:
+            # 如果是404错误(容器在PVE上不存在)或Connection Error，尝试删除数据库记录
+            err_str = str(e)
+            if '404' in err_str or 'does not exist' in err_str:
+                self.perform_destroy(instance)
+                return Response(status=status.HTTP_204_NO_CONTENT)
+                
+            logger.exception(f'删除LXC容器失败: {vmid}')
+            return Response({
+                'detail': f'删除LXC容器失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    def create(self, request, *args, **kwargs):
+        """创建LXC容器。"""
+        serializer = LXCContainerCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        
+        server_id = data['server_id']
+        server = PVEServer.objects.get(id=server_id)
+        
+        try:
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            
+            # 构造PVE API参数
+            params = {
+                'hostname': data['hostname'],
+                'password': data['password'],
+                'ostemplate': data['ostemplate'],
+                'cores': int(data.get('cores', 1)),
+                'memory': int(data.get('memory', 512)),
+                'swap': int(data.get('swap', 512)),
+                'rootfs': f"{data.get('storage', 'local-lvm')}:{data.get('disk_size', 8)}",
+                'net0': f"name=eth0,bridge={data.get('network_bridge', 'vmbr0')},ip={data.get('ip_address', 'dhcp')}",
+                'description': data.get('description', ''),
+            }
+            start_after_create = data.get('start_after_create', False)
+            if start_after_create:
+                params['start'] = 1
+                
+            if data.get('vmid'):
+                params['vmid'] = data['vmid']
+
+            if data.get('gateway') and data.get('ip_address') != 'dhcp':
+                # PVE LXC网关通常在net0参数中指定，例如 gw=192.168.1.1
+                params['net0'] += f",gw={data['gateway']}"
+
+            # 如果没有指定VMID，尝试获取下一个可用ID
+            if not data.get('vmid'):
+                next_id = client.get_next_vmid()
+                params['vmid'] = next_id
+            
+            result = client.create_container(data['node'], params)
+            
+            # 创建数据库记录并保存SSH密码
+            vmid = params.get('vmid')
+            container, created = LXCContainer.objects.update_or_create(
+                server=server,
+                vmid=vmid,
+                defaults={
+                    'name': data['hostname'],
+                    'node': data['node'],
+                    'status': 'creating' if not start_after_create else 'starting',
+                    'ip_address': data.get('ip_address', 'dhcp'),
+                    'ssh_password': data['password'],  # 保存SSH密码
+                    'cpu_cores': data.get('cores', 1),  # 正确的字段名
+                    'memory_mb': data.get('memory', 512),  # 正确的字段名
+                    'disk_gb': data.get('disk_size', 8),  # 正确的字段名
+                    'description': data.get('description', ''),
+                }
+            )
+            
+            logger.info(f'LXC容器 {vmid} 创建任务已提交，数据库记录已{"创建" if created else "更新"}，SSH密码已保存')
+            
+            return Response({
+                'success': True,
+                'message': 'LXC容器创建任务已提交',
+                'upid': result,
+                'vmid': vmid,
+                'container_id': container.id
+            })
+            
+        except Exception as exc:
+            logger.exception('创建LXC容器失败')
+            return Response({
+                'detail': f'创建LXC容器失败: {str(exc)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['post'])
     def container_action(self, request, pk=None):
@@ -1620,6 +2127,854 @@ class LXCContainerViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewse
             return Response({
                 'detail': f'同步容器状态失败: {str(exc)}'
             }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'])
+    def status(self, request, pk=None):
+        """获取容器实时状态。"""
+        container = self.get_object()
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            status_info = client.get_container_status(container.node, container.vmid)
+            return Response(status_info)
+        except Exception as exc:
+            logger.exception('获取容器状态失败')
+            return Response({
+                'detail': f'获取容器状态失败: {str(exc)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'])
+    def rrd(self, request, pk=None):
+        """获取容器RRD监控数据。"""
+        container = self.get_object()
+        timeframe = request.query_params.get('timeframe', 'hour')
+        cf = request.query_params.get('cf', 'AVERAGE')
+        
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            rrd_data = client.get_container_rrd(container.node, container.vmid, timeframe=timeframe, cf=cf)
+            return Response(rrd_data if isinstance(rrd_data, list) else [])
+        except Exception as e:
+            logger.exception('获取RRD数据失败')
+            return Response({
+                'detail': f'获取RRD数据失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get', 'put'])
+    def config(self, request, pk=None):
+        """获取或更新容器配置。"""
+        container = self.get_object()
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            if request.method.upper() == 'GET':
+                config = client.get_container_config(container.node, container.vmid)
+                container.pve_config = config
+                container.save(update_fields=['pve_config'])
+                return Response({'config': config})
+            else:  # PUT
+                params = request.data.get('params', {})
+                if not params:
+                    return Response({
+                        'detail': '缺少需要更新的配置参数'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                result = client.update_container_config(container.node, container.vmid, params)
+                config = client.get_container_config(container.node, container.vmid)
+                container.pve_config = config
+                container.save(update_fields=['pve_config'])
+                return Response({
+                    'success': True,
+                    'message': '配置更新已提交',
+                    'upid': result,
+                    'config': config
+                })
+        except Exception as e:
+            logger.exception('处理容器配置请求失败')
+            return Response({
+                'detail': f'处理容器配置请求失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='console-session')
+    def console_session(self, request, pk=None):
+        """创建LXC noVNC会话。"""
+        container = self.get_object()
+        session_type = request.data.get('type', 'novnc')
+        if session_type != 'novnc':
+            return Response({
+                'detail': '当前仅支持 noVNC 会话'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            
+            proxy = client.create_lxc_vnc_proxy(container.node, container.vmid, websocket=True)
+            port = proxy.get('port')
+            ticket = proxy.get('ticket')
+            password = proxy.get('password')
+            
+            if not port or not ticket:
+                raise Exception('PVE未返回有效的VNC代理信息')
+            
+            encoded_ticket = quote_plus(ticket)
+            websocket_url = (
+                f"wss://{server.host}:{server.port}/api2/json/nodes/{container.node}/lxc/{container.vmid}/"
+                f"vncwebsocket?port={port}&vncticket={encoded_ticket}"
+            )
+            
+            session_token = secrets.token_urlsafe(32)
+            proxy_path = f"/ws/pve/console/{container.id}/?token={session_token}"
+            cache_key = f"{SESSION_CACHE_PREFIX}{session_token}"
+            cache.set(cache_key, {
+                'websocket_url': websocket_url,
+                'ticket': ticket,
+                'port': port,
+                'password': password,
+                'vmid': container.vmid,
+                'vm_pk': container.pk,
+                'node': container.node,
+                'server_id': server.id,
+                'vm_name': container.name,
+                'console_type': 'lxc', # changed from kvm
+                'proxy_path': proxy_path,
+                'origin': f"https://{server.host}:{server.port}",
+            }, timeout=PVE_CONSOLE_SESSION_TTL)
+            proxy_scheme = 'wss' if request.is_secure() else 'ws'
+            proxy_url = f"{proxy_scheme}://{request.get_host()}{proxy_path}"
+            
+            return Response({
+                'websocket_url': websocket_url,
+                'ticket': ticket,
+                'password': password,
+                'port': port,
+                'node': container.node,
+                'vmid': container.vmid,
+                'console_type': 'lxc',
+                'proxy_url': proxy_url
+            })
+            
+        except Exception as exc:
+            logger.exception('创建控制台会话失败')
+            return Response({
+                'detail': f'创建控制台会话失败: {str(exc)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'])
+    def backups(self, request, pk=None):
+        """获取容器备份列表及可用存储。"""
+        container = self.get_object()
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            storages = client.get_storage(container.node)
+            backup_storages = []
+            backups = []
+
+            def supports_backup(storage_item):
+                content = storage_item.get('content')
+                if isinstance(content, str):
+                    entries = [c.strip() for c in content.split(',') if c.strip()]
+                elif isinstance(content, (list, tuple)):
+                    entries = list(content)
+                else:
+                    entries = []
+                return 'backup' in entries
+
+            for storage in storages:
+                if not supports_backup(storage):
+                    continue
+                storage_name = storage.get('storage')
+                backup_storages.append({
+                    'storage': storage_name,
+                    'type': storage.get('type'),
+                    'content': storage.get('content'),
+                    'shared': storage.get('shared'),
+                    'enabled': storage.get('enabled', 1),
+                    'total': storage.get('total'),
+                    'avail': storage.get('avail')
+                })
+                try:
+                    contents = client.get_storage_content(container.node, storage_name, content_type='backup')
+                except Exception as e:
+                    logger.warning('获取备份列表失败 storage=%s: %s', storage_name, e)
+                    continue
+                for item in contents or []:
+                    # 过滤只属于当前容器的备份
+                    if item.get('vmid') and str(item.get('vmid')) != str(container.vmid):
+                        continue
+                    backups.append({
+                        'storage': storage_name,
+                        'volid': item.get('volid'),
+                        'size': item.get('size'),
+                        'format': item.get('format'),
+                        'ctime': item.get('ctime'),
+                        'notes': item.get('notes'),
+                        'protected': item.get('protected', 0),
+                        'vmid': item.get('vmid')
+                    })
+
+            return Response({
+                'backups': backups,
+                'storages': backup_storages
+            })
+        except Exception as e:
+            logger.exception('获取备份列表失败')
+            return Response({
+                'detail': f'获取备份列表失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def create_backup(self, request, pk=None):
+        """创建容器备份。"""
+        container = self.get_object()
+        serializer = VMBackupCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            result = client.create_backup(
+                container.node,
+                container.vmid,
+                storage=data['storage'],
+                mode=data.get('mode', 'snapshot'),
+                compress=data.get('compress', 'zstd'),
+                remove=data.get('remove', False),
+                notes=data.get('notes', '')
+            )
+            return Response({
+                'success': True,
+                'upid': result
+            })
+        except Exception as e:
+            logger.exception('创建备份任务失败')
+            return Response({
+                'detail': f'创建备份失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def restore_backup(self, request, pk=None):
+        """还原备份到容器。"""
+        container = self.get_object()
+        serializer = VMBackupRestoreSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            # 还原备份 (LXC specific)
+            result = client.restore_container(
+                container.node,
+                container.vmid,
+                data['storage'],
+                data['archive'],
+                force=data.get('force', False),
+                unique=data.get('unique', False)
+            )
+            return Response({
+                'success': True,
+                'upid': result,
+                'message': '备份还原任务已提交'
+            })
+        except Exception as e:
+            logger.exception('还原备份失败')
+            return Response({
+                'detail': f'还原备份失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def delete_backup(self, request, pk=None):
+        """删除备份文件。"""
+        container = self.get_object()
+        serializer = VMBackupDeleteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            # 删除备份
+            result = client.delete_backup(
+                container.node,
+                data['storage'],
+                data['volid']
+            )
+            return Response({
+                'success': True,
+                'upid': result,
+                'message': '备份已删除'
+            })
+        except Exception as e:
+            logger.exception('删除备份失败')
+            return Response({
+                'detail': f'删除备份失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def update_backup_notes(self, request, pk=None):
+        """更新备份备注。"""
+        container = self.get_object()
+        serializer = VMBackupNotesSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            client.update_backup_notes(
+                container.node,
+                data['storage'],
+                data['volid'],
+                data['notes']
+            )
+            return Response({
+                'success': True,
+                'message': '备份备注已更新'
+            })
+        except Exception as e:
+            logger.exception('更新备份备注失败')
+            return Response({
+                'detail': f'更新备份备注失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'])
+    def update_backup_protection(self, request, pk=None):
+        """更新备份保护状态。"""
+        container = self.get_object()
+        serializer = VMBackupProtectionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            client.update_backup_protection(
+                container.node,
+                data['storage'],
+                data['volid'],
+                data['protected']
+            )
+            return Response({
+                'success': True,
+                'message': f'备份已{"启用" if data["protected"] else "禁用"}保护'
+            })
+        except Exception as e:
+            logger.exception('更新备份保护状态失败')
+            return Response({
+                'detail': f'更新备份保护状态失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'])
+    def snapshots(self, request, pk=None):
+        """获取容器快照列表。"""
+        container = self.get_object()
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            raw_snapshots = client.list_container_snapshots(container.node, container.vmid) or []
+
+            item_list = []
+            # LXC snapshot list is flat or hierarchical? PVE API returns list with 'parent' field.
+            # We can just return flat list or structure it.
+            # VM implementation does traversal. Let's see if LXC response structure is same.
+            # Usually yes.
+            
+            def traverse(items, parent=None):
+                for item in items or []:
+                    name = item.get('name')
+                    entry = {
+                        'name': name,
+                        'description': item.get('description', ''),
+                        'snaptime': item.get('snaptime'),
+                        'parent': parent,
+                        # 'state': item.get('state'), # LXC might not show state in same way
+                        # 'vmstate': item.get('vmstate', False),
+                        'running': False, # LXC snapshots usually don't have running state flag in list?
+                        'is_current': name == 'current' or item.get('current', False)
+                    }
+                    # Populate extra fields if available
+                    if 'running' in item:
+                         entry['running'] = item['running']
+                    
+                    item_list.append(entry)
+                    children = item.get('children') or []
+                    if children:
+                        traverse(children, name)
+
+            traverse(raw_snapshots, None)
+            return Response({'snapshots': item_list})
+        except Exception as e:
+            logger.exception('获取快照列表失败')
+            return Response({
+                'detail': f'获取快照列表失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def create_snapshot(self, request, pk=None):
+        """创建容器快照。"""
+        container = self.get_object()
+        serializer = VMSnapshotCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            result = client.create_container_snapshot(
+                container.node,
+                container.vmid,
+                name=data['name'],
+                description=data.get('description', ''),
+                # include_memory ignored for LXC in my impl
+            )
+            return Response({
+                'success': True,
+                'upid': result
+            })
+        except Exception as e:
+            logger.exception('创建快照失败')
+            return Response({
+                'detail': f'创建快照失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def rollback_snapshot(self, request, pk=None):
+        """回滚到指定快照。"""
+        container = self.get_object()
+        serializer = VMSnapshotActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            result = client.rollback_container_snapshot(container.node, container.vmid, data['name'])
+            return Response({
+                'success': True,
+                'upid': result
+            })
+        except Exception as e:
+            logger.exception('回滚快照失败')
+            return Response({
+                'detail': f'回滚快照失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def delete_snapshot(self, request, pk=None):
+        """删除指定快照。"""
+        container = self.get_object()
+        serializer = VMSnapshotActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            result = client.delete_container_snapshot(container.node, container.vmid, data['name'])
+            return Response({
+                'success': True,
+                'upid': result
+            })
+        except Exception as e:
+            logger.exception('删除快照失败')
+            return Response({
+                'detail': f'删除快照失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def update_snapshot(self, request, pk=None):
+        """更新快照描述/备注。"""
+        container = self.get_object()
+        serializer = VMSnapshotUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            client.update_container_snapshot(container.node, container.vmid, data['name'], data['description'])
+            return Response({
+                'success': True,
+                'message': '快照描述已更新'
+            })
+        except Exception as e:
+            logger.exception('更新快照描述失败')
+            return Response({
+                'detail': f'更新快照描述失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'])
+    def clone(self, request, pk=None):
+        """克隆容器。"""
+        container = self.get_object()
+        serializer = LXCContainerCloneSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            
+            # 获取新容器ID
+            newid = data.get('newid')
+            if not newid:
+                newid = client.get_next_vmid()
+            
+            # 执行克隆
+            result = client.clone_container(
+                node=container.node,
+                vmid=container.vmid,
+                newid=newid,
+                hostname=data.get('hostname'),
+                description=data.get('description'),
+                full=data.get('full', True),
+                pool=data.get('pool'),
+                snapname=data.get('snapname'),
+                storage=data.get('storage'),
+                target=data.get('target')
+            )
+            
+            # 克隆成功后，创建新容器的数据库记录并复制 SSH 密码
+            try:
+                # 尝试获取新容器的配置信息
+                # 由于全量克隆可能需要较长时间，此时容器可能尚未完全就绪，获取配置可能会失败
+                # 因此如果获取失败，我们仍然创建数据库记录，以便保存SSH密码等信息
+                # 后续的状态同步会更新准确的配置信息
+                new_container_config = {}
+                try:
+                    # 等待一小段时间让 PVE 完成克隆任务的初始化
+                    import time
+                    time.sleep(1)
+                    new_container_config = client.get_container_config(container.node, newid)
+                except Exception as config_error:
+                    logger.warning(f'获取新容器配置失败(可能是克隆仍在进行中): {config_error}，将使用空配置创建记录')
+                
+                # 创建新容器的数据库记录
+                new_container = LXCContainer.objects.create(
+                    server=server,
+                    vmid=newid,
+                    name=data.get('hostname') or f"{container.name}-clone",
+                    node=data.get('target') or container.node,
+                    status='stopped',  # 克隆后的容器默认是停止状态
+                    cpu_cores=container.cpu_cores,
+                    memory_mb=container.memory_mb,
+                    disk_gb=container.disk_gb,
+                    ip_address='',  # IP 地址需要容器启动后才能获取
+                    ssh_password=container.ssh_password,  # 复制源容器的 SSH 密码
+                    description=data.get('description') or f"克隆自 {container.name}",
+                    pve_config=new_container_config,
+                    created_by=request.user,
+                    updated_by=request.user
+                )
+                
+                logger.info(f'已创建克隆容器的数据库记录: {new_container.name} (VMID: {newid}), SSH密码已复制')
+                
+            except Exception as e:
+                # 如果创建数据库记录失败，记录错误但不影响克隆操作
+                logger.warning(f'创建克隆容器数据库记录失败: {e}，容器已在 PVE 中创建')
+            
+            return Response({
+                'success': True,
+                'upid': result,
+                'newid': newid,
+                'message': f'容器克隆任务已提交，新容器ID: {newid}'
+            })
+        except Exception as e:
+            logger.exception('克隆容器失败')
+            return Response({
+                'detail': f'克隆容器失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'])
+    def convert_to_template(self, request, pk=None):
+        """将容器转换为模板。"""
+        container = self.get_object()
+        
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            
+            # 检查容器状态
+            status_info = client.get_container_status(container.node, container.vmid)
+            if status_info.get('status') == 'running':
+                return Response({
+                    'detail': '容器正在运行，请先停止容器再转换为模板'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 转换为模板
+            client.convert_to_template(container.node, container.vmid)
+            
+            # 更新数据库状态
+            container.status = 'template'
+            container.save(update_fields=['status'])
+            
+            return Response({
+                'success': True,
+                'message': '容器已成功转换为模板'
+            })
+        except Exception as e:
+            logger.exception('转换模板失败')
+            return Response({
+                'detail': f'转换模板失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['post'], url_path='console-session')
+    def console_session(self, request, pk=None):
+        """创建 LXC noVNC 控制台会话。"""
+        container = self.get_object()
+        
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            
+            # 检查容器状态
+            status_info = client.get_container_status(container.node, container.vmid)
+            if status_info.get('status') != 'running':
+                return Response({
+                    'error': '容器未运行，无法打开控制台'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 获取 PVE 控制台 WebSocket URL
+            console_data = client.create_lxc_console(container.node, container.vmid)
+            
+            if not console_data:
+                return Response({
+                    'error': '无法创建控制台会话'
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # 提取必要信息
+            ticket = console_data.get('ticket')
+            port = console_data.get('port')
+            user = console_data.get('user', 'root')
+            
+            if not ticket or not port:
+                return Response({
+                    'error': '控制台会话信息不完整'
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # 构建 WebSocket URL
+            ws_protocol = 'wss' if server.port == 8006 and not server.host.startswith('http://') else 'ws'
+            pve_host = server.host.replace('https://', '').replace('http://', '')
+            websocket_url = f'{ws_protocol}://{pve_host}:{server.port}/api2/json/nodes/{container.node}/lxc/{container.vmid}/vncwebsocket?port={port}&vncticket={quote_plus(ticket)}'
+            
+            # 生成临时 session token 用于前端代理认证
+            session_token = secrets.token_urlsafe(32)
+            
+            # 存储会话信息到缓存
+            session_data = {
+                'websocket_url': websocket_url,
+                'ticket': ticket,
+                'port': port,
+                'user': user,
+                'origin': request.build_absolute_uri('/'),
+            }
+            
+            cache_key = SESSION_CACHE_PREFIX + session_token
+            cache.set(cache_key, session_data, timeout=PVE_CONSOLE_SESSION_TTL)
+            
+            # 返回代理 URL (通过后端中转) - 使用 LXC 专用路由
+            ws_proto = 'wss' if request.is_secure() else 'ws'
+            proxy_url = f'{ws_proto}://{request.get_host()}/ws/lxc/console/{container.id}/?token={session_token}'
+            
+            return Response({
+                'proxy_url': proxy_url,
+                'websocket_url': websocket_url,  # 备用直连
+                'ticket': ticket,
+                'token': session_token,
+                'status': 'created'
+            })
+            
+        except Exception as e:
+            logger.exception('创建控制台会话失败')
+            return Response({
+                'error': f'创建控制台会话失败: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @action(detail=True, methods=['post'], url_path='ssh-console-session')
+    def ssh_console_session(self, request, pk=None):
+        """创建 LXC SSH 控制台会话。"""
+        container = self.get_object()
+        
+        try:
+            server = container.server
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+            
+            # 检查容器状态
+            status_info = client.get_container_status(container.node, container.vmid)
+            if status_info.get('status') != 'running':
+                return Response({
+                    'error': '容器未运行，无法建立 SSH 连接'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 获取容器配置，提取 IP 地址
+            config = client.get_container_config(container.node, container.vmid)
+            
+            # 从多个来源尝试获取 IP
+            container_ip = container.ip_address  # 优先使用数据库中的 IP
+            
+            if not container_ip or container_ip == 'dhcp':
+                # 尝试从 net0 配置解析 IP（格式：name=eth0,bridge=vmbr0,ip=192.168.1.100/24）
+                import re
+                net0 = config.get('net0', '')
+                ip_match = re.search(r'ip=([0-9.]+)', net0)
+                if ip_match:
+                    container_ip = ip_match.group(1)
+            
+            # 去除 CIDR 表示法（如 /24）
+            if container_ip and '/' in container_ip:
+                container_ip = container_ip.split('/')[0]
+                logger.info(f'从IP地址中去除CIDR表示法，最终IP: {container_ip}')
+            
+            if not container_ip or container_ip == 'dhcp':
+                return Response({
+                    'error': '无法获取容器 IP 地址，请确保容器配置了静态 IP 或在数据库中设置了 IP'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 生成临时 session token
+            session_token = secrets.token_urlsafe(32)
+            
+            # 将会话信息存入缓存（60秒有效期）
+            session_data = {
+                'container_id': container.id,
+                'vmid': container.vmid,
+                'node': container.node,
+                'host': container_ip,  # 纯IP地址，不含CIDR
+                'port': 22,
+                'username': 'root',  # 默认 root，可从配置读取
+                'server_id': server.id,
+            }
+            
+            cache_key = f'ssh_console_session:{session_token}'
+            cache.set(cache_key, session_data, timeout=60)
+            
+            # 构建 WebSocket URL
+            ws_protocol = 'wss' if request.is_secure() else 'ws'
+            ws_host = request.get_host()
+            proxy_url = f'{ws_protocol}://{ws_host}/ws/ssh/{container.id}/?token={session_token}'
+            
+            return Response({
+                'websocket_url': proxy_url,
+                'proxy_url': proxy_url,
+                'host': container_ip,  # 纯IP地址
+                'port': 22,
+                'username': 'root',
+                'token': session_token,
+                'status': 'created'
+            })
+            
+        except Exception as e:
+            logger.exception('创建 SSH 控制台会话失败')
+            return Response({
+                'error': f'创建 SSH 会话失败: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['post'], url_path='sync_all')
     def sync_all(self, request):
@@ -1763,7 +3118,7 @@ class LXCContainerViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewse
         return Response(summary)
 
 
-class NetworkTopologyViewSet(AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
+class NetworkTopologyViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, ActionSerializerMixin, viewsets.ModelViewSet):
     """网络拓扑视图集：管理 LogicFlow 拓扑图。"""
 
     serializer_class = NetworkTopologyDetailSerializer

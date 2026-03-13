@@ -126,8 +126,8 @@ class VirtualMachineActionSerializer(serializers.Serializer):
     """虚拟机操作序列化器。"""
     
     action = serializers.ChoiceField(
-        choices=['start', 'stop', 'shutdown', 'reboot'],
-        help_text='操作类型：start-启动, stop-停止, shutdown-关闭, reboot-重启'
+        choices=['start', 'stop', 'shutdown', 'reboot', 'suspend', 'resume', 'reset', 'hibernate'],
+        help_text='操作类型：start-启动, stop-停止, shutdown-关闭, reboot-重启, suspend-暂停, resume-恢复, reset-重置, hibernate-休眠'
     )
 
 
@@ -171,6 +171,38 @@ class VMBackupCreateSerializer(serializers.Serializer):
     notes = serializers.CharField(required=False, allow_blank=True, help_text='备份备注')
 
 
+class VMBackupRestoreSerializer(serializers.Serializer):
+    """还原虚拟机备份序列化器。"""
+    
+    storage = serializers.CharField(help_text='存储位置')
+    archive = serializers.CharField(help_text='备份文件路径/volid')
+    force = serializers.BooleanField(default=False, required=False, help_text='是否强制覆盖')
+    unique = serializers.BooleanField(default=False, required=False, help_text='是否生成新的VM ID')
+
+
+class VMBackupDeleteSerializer(serializers.Serializer):
+    """删除虚拟机备份序列化器。"""
+    
+    storage = serializers.CharField(help_text='存储名称')
+    volid = serializers.CharField(help_text='卷ID/备份文件路径')
+
+
+class VMBackupNotesSerializer(serializers.Serializer):
+    """更新备份备注序列化器。"""
+    
+    storage = serializers.CharField(help_text='存储名称')
+    volid = serializers.CharField(help_text='卷ID/备份文件路径')
+    notes = serializers.CharField(required=False, allow_blank=True, help_text='备份备注')
+
+
+class VMBackupProtectionSerializer(serializers.Serializer):
+    """更新备份保护状态序列化器。"""
+    
+    storage = serializers.CharField(help_text='存储名称')
+    volid = serializers.CharField(help_text='卷ID/备份文件路径')
+    protected = serializers.BooleanField(help_text='是否保护')
+
+
 class VMSnapshotCreateSerializer(serializers.Serializer):
     """创建虚拟机快照序列化器。"""
     
@@ -183,6 +215,13 @@ class VMSnapshotActionSerializer(serializers.Serializer):
     """快照操作序列化器（删除/回滚）。"""
     
     name = serializers.CharField(max_length=64, help_text='快照名称')
+
+
+class VMSnapshotUpdateSerializer(serializers.Serializer):
+    """快照更新序列化器（编辑备注）。"""
+    
+    name = serializers.CharField(max_length=64, help_text='快照名称')
+    description = serializers.CharField(required=False, allow_blank=True, help_text='快照描述')
 
 
 class VMCloneSerializer(serializers.Serializer):
@@ -252,6 +291,38 @@ class NetworkTopologySaveSerializer(BaseModelSerializer):
         return value
 
 
+class LXCContainerCreateSerializer(serializers.Serializer):
+    """LXC容器创建序列化器。"""
+    
+    server_id = serializers.IntegerField(help_text='PVE服务器ID')
+    node = serializers.CharField(help_text='节点名称')
+    vmid = serializers.IntegerField(help_text='容器ID（如果不提供则自动分配）', required=False, allow_null=True)
+    hostname = serializers.CharField(max_length=255, help_text='主机名')
+    password = serializers.CharField(help_text='Root密码')
+    ostemplate = serializers.CharField(help_text='操作系统模板')
+    
+    cores = serializers.IntegerField(default=1, help_text='CPU核心数', required=False)
+    memory = serializers.IntegerField(default=512, help_text='内存(MB)', required=False)
+    swap = serializers.IntegerField(default=512, help_text='交换分区(MB)', required=False)
+    
+    storage = serializers.CharField(help_text='根磁盘存储位置', default='local-lvm', required=False)
+    disk_size = serializers.IntegerField(default=8, help_text='根磁盘大小(GB)', required=False)
+    
+    network_bridge = serializers.CharField(default='vmbr0', help_text='网络桥接', required=False)
+    ip_address = serializers.CharField(default='dhcp', help_text='IP地址 (cidr | dhcp)', required=False)
+    gateway = serializers.CharField(required=False, allow_blank=True, help_text='网关')
+    
+    description = serializers.CharField(required=False, allow_blank=True, help_text='描述')
+    start_after_create = serializers.BooleanField(default=False, help_text='创建后是否启动')
+
+    def validate_server_id(self, value):
+        try:
+            PVEServer.objects.get(id=value, is_active=True)
+        except PVEServer.DoesNotExist:
+            raise serializers.ValidationError("PVE服务器不存在或未启用")
+        return value
+
+
 class LXCContainerListSerializer(BaseModelSerializer):
     """LXC容器列表序列化器。"""
     
@@ -294,3 +365,16 @@ class LXCContainerActionSerializer(serializers.Serializer):
         if not isinstance(value, dict):
             raise serializers.ValidationError('附加元信息必须为JSON对象')
         return value
+
+
+class LXCContainerCloneSerializer(serializers.Serializer):
+    """LXC容器克隆序列化器。"""
+    
+    newid = serializers.IntegerField(required=False, allow_null=True, help_text='新容器ID（留空自动获取）')
+    hostname = serializers.CharField(max_length=255, required=False, allow_blank=True, help_text='新容器主机名')
+    description = serializers.CharField(required=False, allow_blank=True, help_text='新容器描述')
+    full = serializers.BooleanField(default=True, required=False, help_text='是否完整克隆（否则为链接克隆）')
+    pool = serializers.CharField(required=False, allow_blank=True, help_text='目标资源池（可选）')
+    snapname = serializers.CharField(required=False, allow_blank=True, help_text='基于指定快照克隆（可选）')
+    storage = serializers.CharField(required=False, allow_blank=True, help_text='目标存储（可选）')
+    target = serializers.CharField(required=False, allow_blank=True, help_text='目标节点（可选，跨节点克隆）')
