@@ -214,12 +214,13 @@ class ChatConversationViewSet(
             # 推送用户消息确认
             yield f"event: user_message\ndata: {json.dumps({'id': user_msg.id, 'role': 'human', 'content': content, 'sequence': seq})}\n\n"
 
-            # 获取关联的模型配置与 API Key
             ai_content = ""
             prompt_tokens = 0
             completion_tokens = 0
             total_tokens = 0
             messages = []
+            started_reasoning = False
+            ended_reasoning = False
             
             try:
                 model_config = AIModelConfig.objects.select_related('api_key').get(model_key=conversation.model_name)
@@ -466,10 +467,25 @@ class ChatConversationViewSet(
                                     data_obj = json.loads(data_str)
                                     if 'choices' in data_obj and len(data_obj['choices']) > 0:
                                         delta = data_obj['choices'][0].get('delta', {})
-                                        if 'content' in delta and delta['content']:
-                                            chunk = delta['content']
-                                            ai_content += chunk
-                                            yield f"event: content_chunk\ndata: {json.dumps({'chunk': chunk})}\n\n"
+                                        
+                                        reasoning_chunk = delta.get('reasoning_content')
+                                        if reasoning_chunk:
+                                            if not started_reasoning:
+                                                started_reasoning = True
+                                                reasoning_chunk = "> **思考过程：**\n> \n" + reasoning_chunk.replace("\n", "\n> ")
+                                            else:
+                                                reasoning_chunk = reasoning_chunk.replace("\n", "\n> ")
+                                                
+                                            ai_content += reasoning_chunk
+                                            yield f"event: content_chunk\ndata: {json.dumps({'chunk': reasoning_chunk})}\n\n"
+
+                                        content_chunk = delta.get('content')
+                                        if content_chunk:
+                                            if started_reasoning and not ended_reasoning:
+                                                ended_reasoning = True
+                                                content_chunk = "\n\n---\n\n" + content_chunk
+                                            ai_content += content_chunk
+                                            yield f"event: content_chunk\ndata: {json.dumps({'chunk': content_chunk})}\n\n"
                                     
                                     # 提取 Token 消耗（通常在流的最后几个 chunk 中传来）
                                     if 'usage' in data_obj and data_obj['usage']:
@@ -541,6 +557,7 @@ class ChatConversationViewSet(
 
         response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
         response['Cache-Control'] = 'no-cache'
+        response['X-Accel-Buffering'] = 'no'
         return response
 
 

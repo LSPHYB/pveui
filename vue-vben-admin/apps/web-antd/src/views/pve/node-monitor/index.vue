@@ -197,7 +197,7 @@ async function loadServers() {
     servers.value = data.filter((item: any) => item.is_active !== false);
 
     if (!selectedServer.value && servers.value.length > 0) {
-      selectedServer.value = servers.value[0].id;
+      selectedServer.value = servers.value[0]?.id;
       loadNodes();
     }
   } catch (error: any) {
@@ -473,7 +473,7 @@ function formatThroughput(value: any, short = false) {
     idx++;
   }
   const fixed = num >= 10 || short ? 1 : 2;
-  return `${num.toFixed(fixed)} ${units[idx].unit}${short ? '' : '/s'}`;
+  return `${num.toFixed(fixed)} ${units[idx]?.unit}${short ? '' : '/s'}`;
 }
 
 function formatDuration(seconds: any) {
@@ -516,7 +516,7 @@ function formatLoad(loadavg: any) {
   return Number(loadavg).toFixed(2);
 }
 
-function getProgressColor(percent: number, thresholds = [75, 90]) {
+function getProgressColor(percent: number, thresholds: [number, number] = [75, 90]) {
   if (percent >= thresholds[1]) return '#ff4d4f';
   if (percent >= thresholds[0]) return '#faad14';
   return '#52c41a';
@@ -614,87 +614,106 @@ watch(selectedNode, handleNodeChange);
       <!-- Summary Stats -->
       <Row :gutter="16">
         <Col :span="6">
-          <Card :bordered="false" class="stat-card">
-            <div class="stat-header mb-2 flex justify-between">
-              <span class="text-gray-500">CPU使用率</span>
-              <Tag size="small">{{ summary.cpu.cores || '-' }} 核</Tag>
-            </div>
-            <div class="mb-2 text-2xl font-bold">
-              {{ summary.cpu.percent.toFixed(1) }}%
-            </div>
-            <Progress
-              :percent="summary.cpu.percent"
-              :stroke-color="getProgressColor(summary.cpu.percent)"
-              :show-info="false"
-              size="small"
-            />
-            <div class="mt-2 text-xs text-gray-500">
-              负载：{{ formatLoad(summary.cpu.loadavg) }}
-            </div>
-          </Card>
-        </Col>
-        <Col :span="6">
-          <Card :bordered="false" class="stat-card">
-            <div class="stat-header mb-2 flex justify-between">
-              <span class="text-gray-500">内存使用率</span>
-              <Tag size="small">
-                {{ formatBytes(summary.memory.used) }}/{{
-                  formatBytes(summary.memory.total)
-                }}
-              </Tag>
-            </div>
-            <div class="mb-2 text-2xl font-bold">
-              {{ summary.memory.percent.toFixed(1) }}%
-            </div>
-            <Progress
-              :percent="summary.memory.percent"
-              :stroke-color="getProgressColor(summary.memory.percent, [80, 90])"
-              :show-info="false"
-              size="small"
-            />
-            <div class="mt-2 text-xs text-gray-500">
-              NUMA：{{ summary.memory.total ? '已启用/默认' : '-' }}
+          <Card :bordered="false" class="stat-card" :body-style="{ padding: '20px 24px' }">
+            <div class="flex justify-between items-center h-[88px]">
+              <div class="flex flex-col justify-center h-full pb-1">
+                <div class="text-xs text-gray-500 font-bold mb-1 uppercase">CPU</div>
+                <div class="text-base font-bold text-gray-800">
+                  {{ summary.cpu.cores || '-' }}核心
+                </div>
+              </div>
+              <Progress
+                type="circle"
+                :percent="summary.cpu.percent"
+                :stroke-color="getProgressColor(summary.cpu.percent)"
+                :size="88"
+                :stroke-width="8"
+              >
+                <template #format>
+                  <div class="text-xl font-bold" :style="{ color: getProgressColor(summary.cpu.percent) }">
+                    {{ Number(summary.cpu.percent.toFixed(1)) }}<span class="text-xs font-normal ml-[1px]">%</span>
+                  </div>
+                </template>
+              </Progress>
             </div>
           </Card>
         </Col>
         <Col :span="6">
-          <Card :bordered="false" class="stat-card">
-            <div class="stat-header mb-2 flex justify-between">
-              <span class="text-gray-500">存储使用率</span>
-              <Tag size="small">
-                {{ formatBytes(summary.storage.used) }}/{{
-                  formatBytes(summary.storage.total)
-                }}
-              </Tag>
+          <Card :bordered="false" class="stat-card" :body-style="{ padding: '20px 24px' }">
+            <div class="flex justify-between items-center h-[88px]">
+              <div class="flex flex-col justify-center h-full pb-1">
+                <div class="text-xs text-gray-500 font-bold mb-1 uppercase">内存</div>
+                <div class="text-sm font-bold text-gray-800">
+                  <span :style="{ color: getProgressColor(summary.memory.percent, [80, 90]) }" class="text-base">
+                    {{ formatBytes(summary.memory.used) }}
+                  </span>
+                  <span class="ml-1">/ {{ formatBytes(summary.memory.total) }}</span>
+                </div>
+              </div>
+              <Progress
+                type="circle"
+                :percent="summary.memory.percent"
+                :stroke-color="getProgressColor(summary.memory.percent, [80, 90])"
+                :size="88"
+                :stroke-width="8"
+              >
+                <template #format>
+                  <div class="text-xl font-bold" :style="{ color: getProgressColor(summary.memory.percent, [80, 90]) }">
+                    {{ Number(summary.memory.percent.toFixed(1)) }}<span class="text-xs font-normal ml-[1px]">%</span>
+                  </div>
+                </template>
+              </Progress>
             </div>
-            <div class="mb-2 text-2xl font-bold">
-              {{ summary.storage.percent.toFixed(1) }}%
-            </div>
-            <Progress
-              :percent="summary.storage.percent"
-              :stroke-color="
-                getProgressColor(summary.storage.percent, [80, 90])
-              "
-              :show-info="false"
-              size="small"
-            />
-            <div class="mt-2 text-xs text-gray-500">根存储使用</div>
           </Card>
         </Col>
         <Col :span="6">
-          <Card :bordered="false" class="stat-card">
-            <div class="stat-header mb-2 flex justify-between">
-              <span class="text-gray-500">网络吞吐</span>
-              <Tag size="small">实时</Tag>
+          <Card :bordered="false" class="stat-card" :body-style="{ padding: '20px 24px' }">
+            <div class="flex justify-between items-center h-[88px]">
+              <div class="flex flex-col justify-center h-full pb-1">
+                <div class="text-xs text-gray-500 font-bold mb-1 uppercase">存储</div>
+                <div class="text-sm font-bold text-gray-800">
+                  <span :style="{ color: getProgressColor(summary.storage.percent, [80, 90]) }" class="text-base">
+                    {{ formatBytes(summary.storage.used) }}
+                  </span>
+                  <span class="ml-1">/ {{ formatBytes(summary.storage.total) }}</span>
+                </div>
+              </div>
+              <Progress
+                type="circle"
+                :percent="summary.storage.percent"
+                :stroke-color="getProgressColor(summary.storage.percent, [80, 90])"
+                :size="88"
+                :stroke-width="8"
+              >
+                <template #format>
+                  <div class="text-xl font-bold" :style="{ color: getProgressColor(summary.storage.percent, [80, 90]) }">
+                    {{ Number(summary.storage.percent.toFixed(1)) }}<span class="text-xs font-normal ml-[1px]">%</span>
+                  </div>
+                </template>
+              </Progress>
             </div>
-            <div class="mb-1 text-2xl font-bold">
-              {{ formatThroughput(summary.network.in) }}/s
-            </div>
-            <div class="mb-2 text-xs text-gray-500">
-              出：{{ formatThroughput(summary.network.out) }}/s
-            </div>
-            <div class="mt-0 text-xs text-gray-500">
-              运行时长：{{ formatDuration(summary.uptime) }}
+          </Card>
+        </Col>
+        <Col :span="6">
+          <Card :bordered="false" class="stat-card" :body-style="{ padding: '20px 24px' }">
+            <div class="flex justify-between items-center h-[88px]">
+              <div class="flex flex-col justify-center h-full pb-1">
+                <div class="text-xs text-gray-500 font-bold mb-1 uppercase">网络 (入 / 出)</div>
+                <div class="text-[13px] font-bold text-gray-800">
+                  <div class="text-cyan-600 mb-0.5">
+                    <span class="text-base">{{ formatThroughput(summary.network.in, true) }}</span> /s
+                  </div>
+                  <div class="text-red-500">
+                    <span class="text-base">{{ formatThroughput(summary.network.out, true) }}</span> /s
+                  </div>
+                </div>
+              </div>
+              <div class="text-xs text-right flex flex-col justify-center h-full pb-1">
+                <div class="text-gray-400 mb-0.5 scale-90 origin-right whitespace-nowrap uppercase">运行时长</div>
+                <div class="text-gray-600 font-bold whitespace-nowrap">{{ formatDuration(summary.uptime) }}</div>
+                <div class="text-gray-400 mt-[6px] mb-0.5 scale-90 origin-right whitespace-nowrap uppercase">系统负载</div>
+                <div class="text-gray-600 font-bold whitespace-nowrap">{{ formatLoad(summary.cpu.loadavg) }}</div>
+              </div>
             </div>
           </Card>
         </Col>

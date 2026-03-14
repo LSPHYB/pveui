@@ -124,6 +124,20 @@ export async function getNodeResourceConfigApi(
 }
 
 /**
+ * 通过 QEMU Guest Agent 获取 VM 网络接口（含 IP）
+ * 需要 VM 运行中且已安装 qemu-guest-agent
+ */
+export async function getVmAgentNetworkApi(
+  serverId: number,
+  node: string,
+  vmid: number | string,
+) {
+  return requestClient.get(
+    `/pve/servers/${serverId}/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces/`,
+  );
+}
+
+/**
  * 获取下一个可用的VMID
  */
 export async function getNextVmidApi(serverId: number) {

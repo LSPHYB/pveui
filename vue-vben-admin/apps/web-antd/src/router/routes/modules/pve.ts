@@ -57,15 +57,6 @@ const routes: RouteRecordRaw[] = [
         },
       },
       {
-        path: 'tasks',
-        name: 'PVE_Tasks',
-        component: () => import('#/views/pve/tasks/index.vue'),
-        meta: {
-          title: '任务日志',
-          icon: 'lucide:file-clock',
-        },
-      },
-      {
         path: 'topology',
         name: 'PVE_Topology',
         component: () => import('#/views/pve/topology/index.vue'),
