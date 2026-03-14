@@ -109,6 +109,27 @@ export interface LxcContainerModel extends VirtualMachineModel {
   // same fields for now
 }
 
+export interface NetworkTopologyModel {
+  id: number;
+  name: string;
+  description: string;
+  is_active: boolean;
+  diagram_data: any;
+  metadata: any;
+  created_at: string;
+  updated_at: string;
+  remark?: string;
+}
+
+export interface NetworkTopologySaveParams {
+  name: string;
+  description?: string;
+  is_active?: boolean;
+  diagram_data?: any;
+  metadata?: any;
+  remark?: string;
+}
+
 export interface PveNetworkInterface {
   iface: string;
   type: string;

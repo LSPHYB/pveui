@@ -104,6 +104,16 @@ const coreRoutes: RouteRecordRaw[] = [
         component: () => import('#/views/experiments/student/SubmissionEditor.vue'),
         meta: { hideInMenu: true, title: '编辑报告', activePath: '/experiments/student' },
       },
+      {
+        path: 'pve/topology',
+        name: 'PVE_Topology',
+        component: () => import('#/views/pve/topology/index.vue'),
+        meta: {
+          hideInMenu: true,
+          title: '网络拓扑',
+          currentActiveMenu: '/pve/topology',
+        },
+      },
 
     ],
   },

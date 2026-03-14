@@ -46,6 +46,10 @@ const { x, y, style: floatingStyle } = useDraggable(floatingBtnRef, {
 const availableModels = ref<any[]>([]);
 const selectedModel = ref<string | undefined>(undefined);
 
+// 用于区分点击还是拖拽
+const dragStartX = ref(0);
+const dragStartY = ref(0);
+
 // 会话管理
 const conversations = ref<any[]>([]);
 const currentConversationId = ref<number | null>(null);
@@ -96,12 +100,24 @@ const scrollToBottom = () => {
   });
 };
 
-const toggleDrawer = () => {
+const toggleDrawer = (e?: MouseEvent) => {
+  if (e) {
+    const dx = Math.abs(e.clientX - dragStartX.value);
+    const dy = Math.abs(e.clientY - dragStartY.value);
+    // 如果移动距离超过 5 像素，认为是拖动，不打开抽屉
+    if (dx > 5 || dy > 5) return;
+  }
+  
   drawerVisible.value = !drawerVisible.value;
   if (drawerVisible.value) {
     unreadCount.value = 0;
     isPulsing.value = false;
   }
+};
+
+const handleMouseDown = (e: MouseEvent) => {
+  dragStartX.value = e.clientX;
+  dragStartY.value = e.clientY;
 };
 
 // ── 初始化 ──────────────────────────────────────────────────────────────
@@ -258,12 +274,12 @@ const handleSend = async () => {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, stream: true }),
       },
     );
 
     if (!response.ok) {
-      if (response.status === 429) throw new Error('请求过于频繁，请稍后再试');
+       if (response.status === 429) throw new Error('请求过于频繁，请稍后再试');
       if (response.status === 402)
         throw new Error('使用配额已满，请联系管理员');
       if (response.status === 401) throw new Error('登录已过期，请重新登录');
@@ -272,53 +288,55 @@ const handleSend = async () => {
 
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
-    let aiMsg: any = null;
+    let aiMsgId: number | null = null;
     let buffer = '';
+
+    let eventType = '';
 
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-      const blocks = buffer.split('\n\n');
-      buffer = blocks.pop() ?? '';
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? ''; // The last element is the incomplete line
 
-      for (const block of blocks) {
-        const lines = block.split('\n');
-        let eventType = '';
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            eventType = line.slice(7).trim();
-          } else if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (eventType === 'user_message') {
-                // 将临时消息替换为服务端真实ID
-                const idx = messages.value.findIndex((m) => m.id === tempId);
-                if (idx !== -1) messages.value[idx] = data;
-              } else if (eventType === 'content_chunk') {
-                if (!aiMsg) {
-                  aiMsg = { id: Date.now() + 1, role: 'ai', content: '' };
-                  messages.value.push(aiMsg);
-                }
-                aiMsg.content += data.chunk ?? '';
-                scrollToBottom();
-              } else if (eventType === 'assistant_message') {
-                if (aiMsg) {
-                  const idx = messages.value.findIndex(
-                    (m) => m.id === aiMsg.id,
-                  );
-                  if (idx !== -1) messages.value[idx] = data;
-                } else {
-                  messages.value.push(data);
-                }
-                scrollToBottom();
-                // 刷新配额显示
-                loadQuota();
+      for (const line of lines) {
+        if (!line.trim()) continue; // Skip empty lines between SSE messages
+        
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          try {
+            const dataStr = line.slice(6).trim();
+            if (dataStr === '[DONE]') break;
+            const data = JSON.parse(dataStr);
+            
+            if (eventType === 'user_message') {
+              const idx = messages.value.findIndex((m) => m.id === tempId);
+              if (idx !== -1) messages.value[idx] = data;
+            } else if (eventType === 'content_chunk') {
+              if (!aiMsgId) {
+                aiMsgId = Date.now() + 1;
+                messages.value.push({ id: aiMsgId, role: 'ai', content: '' });
               }
-            } catch {
-              // 忽略解析错误的块
+              const idx = messages.value.findIndex((m) => m.id === aiMsgId);
+              if (idx !== -1) {
+                messages.value[idx].content += data.chunk ?? '';
+              }
+              scrollToBottom();
+            } else if (eventType === 'assistant_message') {
+              if (aiMsgId) {
+                const idx = messages.value.findIndex((m) => m.id === aiMsgId);
+                if (idx !== -1) messages.value[idx] = data;
+              } else {
+                messages.value.push(data);
+              }
+              scrollToBottom();
+              loadQuota();
             }
+          } catch {
+             // Silently ignore incomplete/malformed chunks
           }
         }
       }
@@ -383,6 +401,7 @@ onMounted(() => {
             height: 56px;
             box-shadow: 0 4px 16px rgba(22, 93, 255, 0.4);
           "
+          @mousedown="handleMouseDown"
           @click="toggleDrawer"
         >
           <template #icon>
