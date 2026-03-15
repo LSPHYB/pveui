@@ -1,24 +1,30 @@
-version: '1.0'
+version: '3.8'
 
 services:
   # Django 后端服务
   backend:
-    image: 
+    image: pve_backend:latest
     container_name: django-backend
     restart: always
     environment:
       - AUTOBAHN_USE_UVLOOP=0
       - TWISTED_REACTOR=asyncio
-    command: sh -c "python manage.py runserver 0.0.0.0:8000"
+      # 数据库连接信息（改成你的公网 MySQL 地址）
+      - DB_HOST=106.55.160.167
+      - DB_PORT=3306
+      - DB_NAME=pve
+      - DB_USER=pve
+      - DB_PASSWORD=root
+    command: daphne -b 0.0.0.0 -p 8000 django_vue_adminx.asgi:application
     ports:
       - "8000:8000"
 
   # Vue 前端服务
   frontend:
-    image: 
+    image: vben_admin-frontend:latest
     container_name: vben-admin-frontend
     ports:
-      - "8012:80"
+      - "2208:80"
     depends_on:
       - backend
     restart: always

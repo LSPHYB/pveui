@@ -8,12 +8,19 @@ WORKDIR /app
 # 复制 requirements 文件（从 backend 目录）
 COPY ./ /app/
 
+# 安装系统依赖（MySQL 客户端库和编译工具）
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    pkg-config \
+    libmariadb-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # 安装 Python 依赖
-RUN pip install --upgrade pip -i https://mirrors.aliyun.com/pypi/simple/ && \
-    pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt 
 
 # 收集静态文件（如果需要）
-RUN python manage.py makemigrations && python manage.py migrate && python manage.py init_rbac --create-superuser && python manage.py init_rbac
+# RUN python manage.py makemigrations && python manage.py migrate && python manage.py init_rbac --create-superuser && python manage.py init_rbac
 
 # 暴露端口
 EXPOSE 8000
