@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>PVE 系统 ER 图（分模块）</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 20px; background: #f5f7fa; }
+    h1 { text-align: center; color: #2c3e50; }
+    h2 { color: #34495e; border-left: 4px solid #3498db; padding-left: 12px; margin-top: 40px; }
+    .card {
+      background: white;
+      border-radius: 10px;
+      padding: 24px;
+      margin-bottom: 40px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      overflow-x: auto;
+    }
+    .caption {
+      text-align: center;
+      color: #7f8c8d;
+      font-size: 13px;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+<h1>PVE 系统数据库 ER 图（分模块）</h1>
+
+<!-- ===================== 图1：用户认证与权限模块 ===================== -->
+<h2>图1：用户认证与权限管理模块</h2>
+<div class="card">
+<div class="mermaid">
+erDiagram
+  auth_user {
+    int id PK
+    varchar username
+    varchar password
+    varchar email
+    tinyint is_superuser
+    tinyint is_staff
+    tinyint is_active
+  }
+  auth_group {
+    int id PK
+    varchar name
+  }
+  auth_permission {
+    int id PK
+    varchar name
+    varchar codename
+    int content_type_id FK
+  }
+  django_content_type {
+    int id PK
+    varchar app_label
+    varchar model
+  }
+  auth_user_groups {
+    bigint id PK
+    int user_id FK
+    int group_id FK
+  }
+  auth_user_user_permissions {
+    bigint id PK
+    int user_id FK
+    int permission_id FK
+  }
+  auth_group_permissions {
+    bigint id PK
+    int group_id FK
+    int permission_id FK
+  }
+  rbac_userprofile {
+    bigint id PK
+    varchar avatar
+    longtext biography
+    int user_id FK
+  }
+
+  django_content_type ||--o{ auth_permission : "content_type_id"
+  auth_user ||--o{ auth_user_groups : "user_id"
+  auth_group ||--o{ auth_user_groups : "group_id"
+  auth_user ||--o{ auth_user_user_permissions : "user_id"
+  auth_permission ||--o{ auth_user_user_permissions : "permission_id"
+  auth_group ||--o{ auth_group_permissions : "group_id"
+  auth_permission ||--o{ auth_group_permissions : "permission_id"
+  auth_user ||--o{ rbac_userprofile : "user_id"
+</div>
+<p class="caption">图1 用户认证与权限管理模块 ER 图</p>
+</div>
+
+<!-- ===================== 图2：RBAC 角色组织模块 ===================== -->
+<h2>图2：RBAC 角色与组织架构模块</h2>
+<div class="card">
+<div class="mermaid">
+erDiagram
+  auth_user {
+    int id PK
+    varchar username
+  }
+  rbac_role {
+    bigint id PK
+    varchar name
+    varchar code
+    varchar description
+    varchar data_scope
+  }
+  rbac_menu {
+    bigint id PK
+    varchar title
+    varchar path
+    varchar component
+    int order
+    tinyint is_hidden
+    bigint parent_id FK
+  }
+  rbac_permission {
+    bigint id PK
+    varchar name
+    varchar code
+    varchar http_method
+    varchar url_pattern
+    tinyint is_active
+    bigint menu_id FK
+  }
+  rbac_organization {
+    bigint id PK
+    varchar name
+    varchar code
+    tinyint is_active
+    int leader_id FK
+    bigint parent_id FK
+  }
+  rbac_userrole {
+    bigint id PK
+    datetime created_at
+    bigint role_id FK
+    int user_id FK
+  }
+  rbac_userorganization {
+    bigint id PK
+    tinyint is_primary
+    bigint organization_id FK
+    int user_id FK
+  }
+  rbac_role_menus {
+    bigint id PK
+    bigint role_id FK
+    bigint menu_id FK
+  }
+  rbac_role_permissions {
+    bigint id PK
+    bigint role_id FK
+    bigint permission_id FK
+  }
+  rbac_role_custom_data_organizations {
+    bigint id PK
+    bigint role_id FK
+    bigint organization_id FK
+  }
+
+  rbac_menu ||--o{ rbac_menu : "parent_id"
+  rbac_organization ||--o{ rbac_organization : "parent_id"
+  rbac_menu ||--o{ rbac_permission : "menu_id"
+  rbac_role ||--o{ rbac_role_menus : "role_id"
+  rbac_menu ||--o{ rbac_role_menus : "menu_id"
+  rbac_role ||--o{ rbac_role_permissions : "role_id"
+  rbac_permission ||--o{ rbac_role_permissions : "permission_id"
+  rbac_role ||--o{ rbac_role_custom_data_organizations : "role_id"
+  rbac_organization ||--o{ rbac_role_custom_data_organizations : "organization_id"
+  auth_user ||--o{ rbac_userrole : "user_id"
+  rbac_role ||--o{ rbac_userrole : "role_id"
+  auth_user ||--o{ rbac_userorganization : "user_id"
+  rbac_organization ||--o{ rbac_userorganization : "organization_id"
+  auth_user ||--o{ rbac_organization : "leader_id"
+</div>
+<p class="caption">图2 RBAC 角色与组织架构模块 ER 图</p>
+</div>
+
+<!-- ===================== 图3：实验管理模块 ===================== -->
+<h2>图3：课程实验管理模块</h2>
+<div class="card">
+<div class="mermaid">
+erDiagram
+  auth_user {
+    int id PK
+    varchar username
+  }
+  rbac_organization {
+    bigint id PK
+    varchar name
+  }
+  experiments_courseexperiment {
+    bigint id PK
+    varchar title
+    varchar course_code
+    varchar category
+    varchar difficulty
+    datetime start_time
+    datetime end_time
+    varchar pve_template_id
+    decimal total_score
+    json scoring_criteria
+    varchar status
+    tinyint is_active
+    int teacher_id FK
+    int created_by_id FK
+    bigint owner_organization_id FK
+  }
+  experiments_courseguidebook {
+    bigint id PK
+    varchar title
+    varchar doc_type
+    varchar file_name
+    bigint file_size
+    varchar file_type
+    tinyint is_indexed
+    varchar index_status
+    json keywords
+    tinyint is_public
+    bigint experiment_id FK
+    int created_by_id FK
+    bigint owner_organization_id FK
+  }
+  experiments_coursesubmission {
+    bigint id PK
+    varchar submission_status
+    datetime submit_time
+    tinyint is_late
+    longtext report_content
+    json vm_info
+    decimal score
+    varchar grade_status
+    datetime graded_at
+    longtext feedback
+    bigint experiment_id FK
+    int student_id FK
+    int graded_by_id FK
+    bigint owner_organization_id FK
+  }
+
+  auth_user ||--o{ experiments_courseexperiment : "teacher_id"
+  rbac_organization ||--o{ experiments_courseexperiment : "owner_organization_id"
+  experiments_courseexperiment ||--o{ experiments_courseguidebook : "experiment_id"
+  rbac_organization ||--o{ experiments_courseguidebook : "owner_organization_id"
+  experiments_courseexperiment ||--o{ experiments_coursesubmission : "experiment_id"
+  auth_user ||--o{ experiments_coursesubmission : "student_id"
+  auth_user ||--o{ experiments_coursesubmission : "graded_by_id"
+  rbac_organization ||--o{ experiments_coursesubmission : "owner_organization_id"
+</div>
+<p class="caption">图3 课程实验管理模块 ER 图</p>
+</div>
+
+<!-- ===================== 图4：AI 对话模块 ===================== -->
+<h2>图4：AI 对话模块</h2>
+<div class="card">
+<div class="mermaid">
+erDiagram
+  auth_user {
+    int id PK
+    varchar username
+  }
+  rbac_organization {
+    bigint id PK
+    varchar name
+  }
+  chat_aiapikey {
+    bigint id PK
+    varchar provider
+    varchar key_name
+    tinyint is_active
+    int priority
+    bigint total_tokens_used
+    decimal total_cost
+    int created_by_id FK
+    bigint owner_organization_id FK
+  }
+  chat_aimodelconfig {
+    bigint id PK
+    varchar model_key
+    varchar model_name
+    varchar model_type
+    tinyint is_enabled
+    tinyint is_default
+    int max_tokens
+    bigint api_key_id FK
+    int created_by_id FK
+    bigint owner_organization_id FK
+  }
+  chat_aiagentconfig {
+    bigint id PK
+    varchar agent_key
+    varchar agent_name
+    longtext system_prompt
+    varchar context_type
+    tinyint enable_rag
+    tinyint enable_memory
+    tinyint is_active
+    bigint model_config_id FK
+    bigint bounded_experiment_id FK
+    bigint owner_organization_id FK
+  }
+  chat_aiuserquota {
+    bigint id PK
+    varchar quota_type
+    bigint token_limit
+    bigint tokens_used
+    tinyint is_active
+    int user_id FK
+    bigint owner_organization_id FK
+  }
+  chat_chatconversation {
+    bigint id PK
+    varchar session_id
+    varchar title
+    varchar context_type
+    int message_count
+    varchar model_name
+    int user_id FK
+    bigint owner_organization_id FK
+  }
+  chat_chatmessage {
+    bigint id PK
+    varchar role
+    longtext content
+    int sequence
+    int total_tokens
+    varchar model_name
+    varchar feedback
+    bigint conversation_id FK
+    bigint parent_message_id FK
+    bigint owner_organization_id FK
+  }
+  chat_chatconversationsummary {
+    bigint id PK
+    varchar summary_type
+    longtext summary_content
+    int tokens_saved
+    bigint conversation_id FK
+    bigint owner_organization_id FK
+  }
+  chat_aiusagelog {
+    bigint id PK
+    varchar model_key
+    int total_tokens
+    decimal cost
+    varchar status
+    bigint api_key_id FK
+    int user_id FK
+    bigint conversation_id FK
+    bigint message_id FK
+  }
+
+  chat_aiapikey ||--o{ chat_aimodelconfig : "api_key_id"
+  chat_aimodelconfig ||--o{ chat_aiagentconfig : "model_config_id"
+  auth_user ||--o{ chat_aiuserquota : "user_id"
+  rbac_organization ||--o{ chat_aiuserquota : "owner_organization_id"
+  auth_user ||--o{ chat_chatconversation : "user_id"
+  rbac_organization ||--o{ chat_chatconversation : "owner_organization_id"
+  chat_chatconversation ||--o{ chat_chatmessage : "conversation_id"
+  chat_chatmessage ||--o{ chat_chatmessage : "parent_message_id"
+  chat_chatconversation ||--o{ chat_chatconversationsummary : "conversation_id"
+  chat_aiapikey ||--o{ chat_aiusagelog : "api_key_id"
+  auth_user ||--o{ chat_aiusagelog : "user_id"
+  chat_chatconversation ||--o{ chat_aiusagelog : "conversation_id"
+  chat_chatmessage ||--o{ chat_aiusagelog : "message_id"
+  rbac_organization ||--o{ chat_aiapikey : "owner_organization_id"
+  rbac_organization ||--o{ chat_aimodelconfig : "owner_organization_id"
+  rbac_organization ||--o{ chat_aiagentconfig : "owner_organization_id"
+  rbac_organization ||--o{ chat_chatmessage : "owner_organization_id"
+  rbac_organization ||--o{ chat_chatconversationsummary : "owner_organization_id"
+</div>
+<p class="caption">图4 AI 对话模块 ER 图</p>
+</div>
+
+<!-- ===================== 图5：AI 知识库与实验上下文 ===================== -->
+<h2>图5：AI 知识库与实验上下文模块</h2>
+<div class="card">
+<div class="mermaid">
+erDiagram
+  experiments_courseexperiment {
+    bigint id PK
+    varchar title
+    varchar course_code
+  }
+  experiments_courseguidebook {
+    bigint id PK
+    varchar title
+    varchar doc_type
+    tinyint is_indexed
+    varchar index_status
+    bigint experiment_id FK
+  }
+  experiments_coursesubmission {
+    bigint id PK
+    varchar submission_status
+    decimal score
+    bigint experiment_id FK
+    int student_id FK
+  }
+  chat_chatconversation {
+    bigint id PK
+    varchar session_id
+    varchar title
+  }
+  chat_aiknowledgeindexstatus {
+    bigint id PK
+    varchar status
+    int chunk_num
+    bigint experiment_id FK
+    bigint guidebook_id FK
+  }
+  chat_chatexperimentcontext {
+    bigint id PK
+    json indexed_content_ids
+    bigint conversation_id FK
+    bigint experiment_id FK
+    bigint guidebook_id FK
+    bigint submission_id FK
+  }
+  chat_aiagentconfig {
+    bigint id PK
+    varchar agent_key
+    tinyint enable_rag
+    tinyint is_active
+    bigint bounded_experiment_id FK
+  }
+
+  experiments_courseexperiment ||--o{ experiments_courseguidebook : "experiment_id"
+  experiments_courseexperiment ||--o{ chat_aiknowledgeindexstatus : "experiment_id"
+  experiments_courseguidebook ||--|| chat_aiknowledgeindexstatus : "guidebook_id"
+  chat_chatconversation ||--|{ chat_chatexperimentcontext : "conversation_id"
+  experiments_courseexperiment ||--o{ chat_chatexperimentcontext : "experiment_id"
+  experiments_courseguidebook ||--o{ chat_chatexperimentcontext : "guidebook_id"
+  experiments_coursesubmission ||--o{ chat_chatexperimentcontext : "submission_id"
+  experiments_courseexperiment ||--o{ chat_aiagentconfig : "bounded_experiment_id"
+</div>
+<p class="caption">图5 AI 知识库与实验上下文模块 ER 图</p>
+</div>
+
+<!-- ===================== 图6：PVE 虚拟化模块 ===================== -->
+<h2>图6：PVE 虚拟化管理模块</h2>
+<div class="card">
+<div class="mermaid">
+erDiagram
+  auth_user {
+    int id PK
+    varchar username
+  }
+  rbac_organization {
+    bigint id PK
+    varchar name
+  }
+  pve_pveserver {
+    bigint id PK
+    varchar name
+    varchar host
+    int port
+    varchar token_id
+    tinyint verify_ssl
+    tinyint is_active
+    int created_by_id FK
+    bigint owner_organization_id FK
+  }
+  pve_virtualmachine {
+    bigint id PK
+    int vmid
+    varchar name
+    varchar node
+    varchar status
+    int cpu_cores
+    int memory_mb
+    int disk_gb
+    varchar ip_address
+    json pve_config
+    bigint server_id FK
+    int created_by_id FK
+    bigint owner_organization_id FK
+  }
+  pve_networktopology {
+    bigint id PK
+    varchar name
+    tinyint is_active
+    json diagram_data
+    json metadata
+    int created_by_id FK
+    bigint owner_organization_id FK
+  }
+
+  pve_pveserver ||--o{ pve_virtualmachine : "server_id"
+  auth_user ||--o{ pve_pveserver : "created_by_id"
+  rbac_organization ||--o{ pve_pveserver : "owner_organization_id"
+  auth_user ||--o{ pve_virtualmachine : "created_by_id"
+  rbac_organization ||--o{ pve_virtualmachine : "owner_organization_id"
+  auth_user ||--o{ pve_networktopology : "created_by_id"
+  rbac_organization ||--o{ pve_networktopology : "owner_organization_id"
+</div>
+<p class="caption">图6 PVE 虚拟化管理模块 ER 图</p>
+</div>
+
+<!-- ===================== 图7：审计与系统配置模块 ===================== -->
+<h2>图7：审计日志与系统配置模块</h2>
+<div class="card">
+<div class="mermaid">
+erDiagram
+  auth_user {
+    int id PK
+    varchar username
+  }
+  rbac_organization {
+    bigint id PK
+    varchar name
+  }
+  django_content_type {
+    int id PK
+    varchar app_label
+    varchar model
+  }
+  audit_operationlog {
+    bigint id PK
+    varchar username
+    datetime created_at
+    varchar action_type
+    varchar request_path
+    varchar request_method
+    json request_params
+    varchar ip_address
+    int status_code
+    longtext error_message
+    int content_type_id FK
+    int user_id FK
+  }
+  system_systemsetting {
+    bigint id PK
+    varchar key
+    longtext value
+    varchar category
+    varchar description
+    tinyint is_encrypted
+    tinyint is_public
+    int created_by_id FK
+    bigint owner_organization_id FK
+    int updated_by_id FK
+  }
+  tasks_job {
+    bigint id PK
+    varchar job_name
+    varchar invoke_target
+    json job_params
+    varchar cron_expression
+    datetime next_valid_time
+    int status
+    varchar job_id
+    int created_by_id FK
+    bigint owner_organization_id FK
+    int updated_by_id FK
+  }
+
+  auth_user ||--o{ audit_operationlog : "user_id"
+  django_content_type ||--o{ audit_operationlog : "content_type_id"
+  auth_user ||--o{ system_systemsetting : "created_by_id"
+  auth_user ||--o{ system_systemsetting : "updated_by_id"
+  rbac_organization ||--o{ system_systemsetting : "owner_organization_id"
+  auth_user ||--o{ tasks_job : "created_by_id"
+  auth_user ||--o{ tasks_job : "updated_by_id"
+  rbac_organization ||--o{ tasks_job : "owner_organization_id"
+</div>
+<p class="caption">图7 审计日志与系统配置模块 ER 图</p>
+</div>
+
+<script>mermaid.initialize({ startOnLoad: true, theme: 'default', er: { diagramPadding: 20 } });</script>
+</body>
+</html>
