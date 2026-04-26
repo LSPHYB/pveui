@@ -1,10 +1,10 @@
-version: '1.0'
+version: '3.8'
 
 services:
   # Django 后端服务
   backend:
-    image: 
-    container_name: django-backend
+    image: pve_backend
+    container_name: pve_backend
     restart: always
     environment:
       - AUTOBAHN_USE_UVLOOP=0
@@ -15,10 +15,10 @@ services:
 
   # Vue 前端服务
   frontend:
-    image: 
+    image: vben-antd-frontend
     container_name: vben-admin-frontend
     ports:
-      - "8012:80"
+      - "2208:80"
     depends_on:
       - backend
     restart: always

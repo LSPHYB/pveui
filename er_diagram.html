@@ -22,6 +22,15 @@
       font-size: 13px;
       margin-top: 10px;
     }
+    .desc {
+      color: #4a4a4a;
+      font-size: 14px;
+      line-height: 1.8;
+      margin: 8px 0 16px 0;
+      padding: 12px 16px;
+      background: #f0f4f8;
+      border-radius: 6px;
+    }
   </style>
 </head>
 <body>
@@ -29,6 +38,7 @@
 
 <!-- ===================== 图1：用户认证与权限模块 ===================== -->
 <h2>图1：用户认证与权限管理模块</h2>
+<p class="desc">本模块基于 Django 内置认证体系，核心实体为 <strong>auth_user</strong>（用户），通过 <strong>auth_user_groups</strong> 和 <strong>auth_user_user_permissions</strong> 两张中间表分别与 <strong>auth_group</strong>（用户组）和 <strong>auth_permission</strong>（权限）建立多对多关联。<strong>auth_permission</strong> 通过 <code>content_type_id</code> 引用 <strong>django_content_type</strong>，实现权限与具体数据模型的绑定。<strong>auth_group_permissions</strong> 中间表维护用户组与权限之间的多对多关系。<strong>rbac_userprofile</strong> 以一对一方式扩展用户信息，存储头像和个人简介等附加属性。</p>
 <div class="card">
 <div class="mermaid">
 erDiagram
@@ -92,6 +102,7 @@ erDiagram
 
 <!-- ===================== 图2：RBAC 角色组织模块 ===================== -->
 <h2>图2：RBAC 角色与组织架构模块</h2>
+<p class="desc">本模块实现基于角色的访问控制（RBAC）与组织架构管理。<strong>rbac_role</strong>（角色）通过 <strong>rbac_role_menus</strong> 和 <strong>rbac_role_permissions</strong> 中间表与 <strong>rbac_menu</strong>（菜单）和 <strong>rbac_permission</strong>（接口权限）建立多对多关系，支持细粒度的菜单与接口访问控制；<strong>rbac_permission</strong> 归属于具体的菜单节点。<strong>rbac_menu</strong> 与 <strong>rbac_organization</strong> 均通过 <code>parent_id</code> 自引用，分别构成菜单树和组织树层级结构。<strong>rbac_userrole</strong> 和 <strong>rbac_userorganization</strong> 分别记录用户与角色、用户与组织之间的归属关系，<strong>rbac_role_custom_data_organizations</strong> 则支持按组织范围进行数据权限隔离。</p>
 <div class="card">
 <div class="mermaid">
 erDiagram
@@ -180,6 +191,7 @@ erDiagram
 
 <!-- ===================== 图3：实验管理模块 ===================== -->
 <h2>图3：课程实验管理模块</h2>
+<p class="desc">本模块围绕课程实验的全生命周期进行数据建模。<strong>experiments_courseexperiment</strong>（课程实验）是核心实体，记录实验标题、课程编号、难度、起止时间、关联 PVE 模板及评分标准等信息，并与授课教师（<strong>auth_user</strong>）和所属组织（<strong>rbac_organization</strong>）关联。<strong>experiments_courseguidebook</strong>（实验指导书）以外键引用实验，支持多文档类型上传并标记知识库索引状态。<strong>experiments_coursesubmission</strong>（实验提交）记录学生的提交状态、虚拟机快照信息、报告内容及教师批改结果（分数、反馈、批改时间），通过外键分别关联实验、学生和批改教师，实现从发布到评分的完整业务闭环。</p>
 <div class="card">
 <div class="mermaid">
 erDiagram
@@ -254,6 +266,7 @@ erDiagram
 
 <!-- ===================== 图4：AI 对话模块 ===================== -->
 <h2>图4：AI 对话模块</h2>
+<p class="desc">本模块支撑系统的 AI 对话功能，涵盖密钥管理、模型配置、会话记录及用量统计四个层次。<strong>chat_aiapikey</strong>（API 密钥）与 <strong>chat_aimodelconfig</strong>（模型配置）形成一对多关系，<strong>chat_aiagentconfig</strong>（智能体配置）在模型配置基础上进一步定义系统提示词、上下文类型及 RAG/记忆开关等行为参数。<strong>chat_chatconversation</strong>（会话）聚合用户的一次完整对话，<strong>chat_chatmessage</strong>（消息）通过 <code>parent_message_id</code> 自引用支持多轮树状对话，<strong>chat_chatconversationsummary</strong> 存储会话压缩摘要以节省 Token 开销。<strong>chat_aiuserquota</strong> 对用户设置 Token 配额上限，<strong>chat_aiusagelog</strong> 则以消息粒度记录每次调用的模型、Token 消耗及费用，便于审计与成本分析。</p>
 <div class="card">
 <div class="mermaid">
 erDiagram
@@ -376,6 +389,7 @@ erDiagram
 
 <!-- ===================== 图5：AI 知识库与实验上下文 ===================== -->
 <h2>图5：AI 知识库与实验上下文模块</h2>
+<p class="desc">本模块将实验资料与 AI 对话上下文打通，实现基于检索增强生成（RAG）的实验辅助问答。<strong>chat_aiknowledgeindexstatus</strong> 与指导书（<strong>experiments_courseguidebook</strong>）一对一绑定，记录向量索引的构建状态及分块数量。<strong>chat_chatexperimentcontext</strong> 以会话为单位，将实验、指导书、学生提交三类上下文关联到同一对话，使 AI 在回答时能同时参考课程内容与学生当前的实验进度。<strong>chat_aiagentconfig</strong> 通过 <code>bounded_experiment_id</code> 将智能体与特定实验绑定，确保每个实验对应的 AI 助手仅在其授权的知识范围内作答。</p>
 <div class="card">
 <div class="mermaid">
 erDiagram
@@ -441,6 +455,7 @@ erDiagram
 
 <!-- ===================== 图6：PVE 虚拟化模块 ===================== -->
 <h2>图6：PVE 虚拟化管理模块</h2>
+<p class="desc">本模块管理 Proxmox VE 物理节点及其上运行的虚拟机资源。<strong>pve_pveserver</strong>（PVE 服务器）记录物理节点的连接信息（主机地址、端口、Token 凭证及 SSL 验证选项），<strong>pve_virtualmachine</strong>（虚拟机）以外键归属于某台 PVE 服务器，存储 VMID、节点名称、运行状态、CPU/内存/磁盘配置、IP 地址及完整的 PVE 配置快照（JSON）。<strong>pve_networktopology</strong>（网络拓扑）独立存储可视化拓扑图数据，支持以图形化方式设计和展示实验环境的网络架构。三张表均通过 <code>created_by_id</code> 和 <code>owner_organization_id</code> 实现资源归属追踪与多租户数据隔离。</p>
 <div class="card">
 <div class="mermaid">
 erDiagram
@@ -501,6 +516,7 @@ erDiagram
 
 <!-- ===================== 图7：审计与系统配置模块 ===================== -->
 <h2>图7：审计日志与系统配置模块</h2>
+<p class="desc">本模块负责系统运行的可观测性与配置管理。<strong>audit_operationlog</strong>（操作日志）记录每次请求的用户、时间、操作类型、请求路径与方法、请求参数、客户端 IP 及响应状态码，通过 <code>content_type_id</code> 关联操作对象的模型类型，支持对任意业务实体的变更进行溯源审计。<strong>system_systemsetting</strong>（系统配置）以键值对形式持久化全局参数，支持按分类检索、加密存储敏感值，并记录创建人与最后修改人。<strong>tasks_job</strong>（定时任务）存储 Cron 表达式、调用目标、任务参数及下次执行时间，实现系统级后台作业的统一调度与状态追踪。</p>
 <div class="card">
 <div class="mermaid">
 erDiagram

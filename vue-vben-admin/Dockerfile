@@ -1,36 +1,33 @@
-# 阶段 1：构建阶段
-FROM node:20-alpine AS builder
-
-# 安装 pnpm
-RUN npm install -g pnpm
-
-# 设置工作目录
-WORKDIR /app
-
-# 复制 package.json 和 pnpm-lock.yaml (如果有)
-COPY package.json pnpm-lock.yaml* ./
-
-# 安装项目依赖 (根据锁文件)
-RUN pnpm install --frozen-lockfile || pnpm install
-
-# 复制项目所有文件
-COPY . .
-
-# 执行构建命令，构建生产环境产物
-RUN pnpm build
-
-# 阶段 2：运行阶段
 FROM nginx:alpine
 
-# 将构建阶段的产物复制到 nginx 的默认静态文件目录
-# 注意：vben 默认构建产物在 apps/web-antd/dist 目录下
-COPY --from=builder /app/apps/web-antd/dist /usr/share/nginx/html
+WORKDIR /usr/share/nginx/html
+RUN rm -rf ./*
+COPY apps/web-antd/dist/ .
 
-# 复制自定义 nginx 配置文件 (如果有需要，可选)
-# COPY nginx.conf /etc/nginx/conf.d/default.conf
+# 关键修复点：
+# 1. 增加针对 /api 的转发配置
+# 2. 显式传递 $http_host 给 Django
+RUN printf "server {\n\
+    listen 80;\n\
+    server_name _;\n\
+    absolute_redirect off;\n\
+    port_in_redirect off;\n\
+\n\
+    location / {\n\
+        root /usr/share/nginx/html;\n\
+        index index.html;\n\
+        try_files \$uri \$uri/ /index.html;\n\
+    }\n\
+\n\
+    # 转发后端接口\n\
+    location /api/ {\n\
+        proxy_pass http://pve_backend:8000/api/; # 确保这里的容器名和端口正确\n\
+        proxy_set_header Host \$http_host;\n\
+        proxy_set_header X-Real-IP \$remote_addr;\n\
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;\n\
+        proxy_set_header X-Forwarded-Proto \$scheme;\n\
+    }\n\
+}\n" > /etc/nginx/conf.d/default.conf
 
-# 暴露 80 端口
 EXPOSE 80
-
-# 启动 nginx
 CMD ["nginx", "-g", "daemon off;"]
