@@ -84,11 +84,21 @@ class Command(BaseCommand):
         menu_pve_vm = self._get_or_create_menu('虚拟机管理', 'pve-vm', 'pve/vm/index', 'icon-desktop', menu_pve, 2)
         menu_pve_storage = self._get_or_create_menu('存储管理', 'pve-storage', 'pve/storage/index', 'icon-storage', menu_pve, 3)
         menu_pve_node_monitor = self._get_or_create_menu('PVE节点监控', 'pve-node-monitor', 'pve/node-monitor/index', 'icon-bar-chart', menu_pve, 4)
-        menu_pve_tasks = self._get_or_create_menu('全局任务中心', 'pve-tasks', 'pve/tasks/index', 'icon-list', menu_pve, 5)
         menu_pve_templates = self._get_or_create_menu('模板管理', 'pve-templates', 'pve/templates/index', 'icon-file', menu_pve, 6)
         menu_pve_network = self._get_or_create_menu('网络管理', 'pve-network', 'pve/network/index', 'icon-link', menu_pve, 7)
         menu_pve_topology = self._get_or_create_menu('网络拓扑', 'pve-topology', 'pve/topology/index', 'icon-share-alt', menu_pve, 8)
         menu_pve_lxc = self._get_or_create_menu('LXC容器管理', 'pve-lxc', 'pve/lxc/index', 'icon-apps', menu_pve, 9)
+
+        # 清理遗留菜单：早期版本创建过「全局任务中心」(pve/tasks/index)，
+        # 该页面只存在于已废弃的 Arco 版前端，web-antd 中没有对应组件。
+        # 菜单留在库里会让前端注册出无效路由（route component is invalid）。
+        legacy_menu = Menu.objects.filter(path='pve-tasks').first()
+        if legacy_menu:
+            # 对应接口仍然存在，权限改挂到 PVE 管理下而不是一并删除
+            Permission.objects.filter(menu=legacy_menu).update(menu=menu_pve)
+            legacy_menu.delete()
+            self.stdout.write(self.style.WARNING(
+                '  ✓ 移除遗留菜单「全局任务中心」（web-antd 无对应页面）'))
 
         self.stdout.write(self.style.SUCCESS('  ✓ 创建菜单: 系统管理 / 系统监控 / PVE管理 分组完成'))
 
@@ -169,8 +179,8 @@ class Command(BaseCommand):
         perms.append(self._get_or_create_permission('PVE服务器存储ISO列表', 'pve_server:storage_iso', 'GET', r'/api/pve/servers/\\d+/nodes/[^/]+/storage/[^/]+/iso/', menu_pve_server))
         perms.append(self._get_or_create_permission('PVE节点监控查看', 'pve_node:monitor', 'GET', r'/api/pve/servers/\\d+/nodes/[^/]+/monitor/', menu_pve_node_monitor))
         # 全局任务中心权限
-        perms.append(self._get_or_create_permission('全局任务列表', 'pve_tasks:global_tasks', 'GET', '/api/pve/servers/global-tasks/', menu_pve_tasks))
-        perms.append(self._get_or_create_permission('全局任务日志', 'pve_tasks:global_task_log', 'POST', '/api/pve/servers/task-log/', menu_pve_tasks))
+        perms.append(self._get_or_create_permission('全局任务列表', 'pve_tasks:global_tasks', 'GET', '/api/pve/servers/global-tasks/', menu_pve))
+        perms.append(self._get_or_create_permission('全局任务日志', 'pve_tasks:global_task_log', 'POST', '/api/pve/servers/task-log/', menu_pve))
         # 模板管理权限
         perms.append(self._get_or_create_permission('模板列表', 'pve_templates:list', 'GET', r'/api/pve/servers/\\d+/nodes/[^/]+/storage/[^/]+/content/', menu_pve_templates))
         perms.append(self._get_or_create_permission('模板上传', 'pve_templates:upload', 'POST', r'/api/pve/servers/\\d+/nodes/[^/]+/storage/[^/]+/upload/', menu_pve_templates))
@@ -227,7 +237,7 @@ class Command(BaseCommand):
             # 系统监控
             menu_monitor, menu_operation_log, menu_login_log, menu_tasks,
             # PVE管理
-            menu_pve_server, menu_pve_vm, menu_pve_storage, menu_pve_node_monitor, menu_pve_tasks, menu_pve_templates, menu_pve_network, menu_pve_topology, menu_pve_lxc,
+            menu_pve_server, menu_pve_vm, menu_pve_storage, menu_pve_node_monitor, menu_pve_templates, menu_pve_network, menu_pve_topology, menu_pve_lxc,
         ])
         role_admin.custom_data_organizations.set([org_root, org_admin])
         

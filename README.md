@@ -110,3 +110,6 @@ pnpm install && pnpm dev:antd                          # http://localhost:5666
 ## 注意事项
 
 - **PVE API Token 权限**：创建 Token 时默认勾选了「特权分离」，必须取消勾选，否则接口只有受限权限。
+- **SSH 控制台需要预配置模板**：官方默认的 LXC/VM 模板中 sshd 不允许 root 登录、也不允许密码认证，
+  直接用它创建的实例连 SSH 控制台会失败（后端日志为 `Permission denied for user root`）。
+  正确做法是先手动创建一台配置好 sshd 的实例，转成模板后统一用该模板创建。
