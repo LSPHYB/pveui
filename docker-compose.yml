@@ -1,30 +1,67 @@
-version: '3.8'
-
 services:
+  # MySQL 数据库
+  mysql:
+    image: mysql:8.0
+    container_name: pve-mysql
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${DB_NAME}
+      - MYSQL_USER=${DB_USER}
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    ports:
+      # 仅绑定本机回环，供本地开发连接；生产如无需外部访问可整段删除
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # 首次启动（数据卷为空时）自动导入表结构
+      - ./pve.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./seed-menu.sql:/docker-entrypoint-initdb.d/02-menu.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
   # Django 后端服务
   backend:
+    build:
+      context: ./backend
     image: pve_backend:latest
     container_name: django-backend
     restart: always
+    env_file:
+      - .env
     environment:
       - AUTOBAHN_USE_UVLOOP=0
       - TWISTED_REACTOR=asyncio
-      # 数据库连接信息（改成你的公网 MySQL 地址）
-      - DB_HOST=106.55.160.167
+      - DB_HOST=mysql
       - DB_PORT=3306
-      - DB_NAME=pve
-      - DB_USER=pve
-      - DB_PASSWORD=root
-    command: daphne -b 0.0.0.0 -p 8000 django_vue_adminx.asgi:application
+    # 首次启动初始化 RBAC 菜单/权限/角色与超管（已存在时跳过，可重复执行）
+    command: >
+      sh -c "python manage.py init_rbac --create-superuser
+      --superuser-username '${ADMIN_USERNAME:-admin}'
+      --superuser-password '${ADMIN_PASSWORD:-admin123}' &&
+      exec daphne -b 0.0.0.0 -p 8000 django_vue_adminx.asgi:application"
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
 
   # Vue 前端服务
   frontend:
+    build:
+      context: ./vue-vben-admin
     image: vben_admin-frontend:latest
     container_name: vben-admin-frontend
+    restart: always
     ports:
-      - "2208:80"
+      - "${FRONTEND_PORT:-2208}:80"
     depends_on:
       - backend
-    restart: always
+
+volumes:
+  mysql-data:

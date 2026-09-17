@@ -13,6 +13,8 @@ import os
 import sys
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 # Monkey Patch for MySQL 5.7 compatibility with Django 5.x
 try:
     from django.db.backends.mysql.base import DatabaseWrapper
@@ -27,7 +29,16 @@ if str(backend_apps) not in sys.path:
     sys.path.insert(0, str(backend_apps))
 # 环境变量（用于 Docker）
 DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
-SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure--mpclg7e91pkc&c+dz3lcf%=ddfye@9asvaf4z7xnjd9tpt#bb')
+
+SECRET_KEY = os.getenv('SECRET_KEY', '')
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = 'django-insecure-dev-only-not-for-production'
+    else:
+        raise ImproperlyConfigured(
+            'DEBUG=False 时必须通过环境变量提供 SECRET_KEY，'
+            "生成方式：python -c \"import secrets; print(secrets.token_urlsafe(50))\""
+        )
 
 
 # Quick-start development settings - unsuitable for production
@@ -39,7 +50,8 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure--mpclg7e91pkc&c+dz3lcf%=dd
 # SECURITY WARNING: don't run with debug turned on in production!
 # DEBUG 已在文件顶部定义
 
-ALLOWED_HOSTS = ["*"]
+# 逗号分隔的主机名列表；默认放行全部，生产环境应显式收紧
+ALLOWED_HOSTS = [h.strip() for h in os.getenv('ALLOWED_HOSTS', '*').split(',') if h.strip()]
 
 
 # Application definition
@@ -107,8 +119,9 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': os.getenv('DB_NAME', 'pve'),
         'USER': os.getenv('DB_USER', 'pve'),
-        'PASSWORD': os.getenv('DB_PASSWORD', 'root'),
-        'HOST': os.getenv('DB_HOST', '106.55.160.167'),
+        'PASSWORD': os.getenv('DB_PASSWORD', ''),
+        # 默认为 docker compose 中的 mysql 服务名；本地开发设为 127.0.0.1
+        'HOST': os.getenv('DB_HOST', 'mysql'),
         'PORT': os.getenv('DB_PORT', '3306'),
         'OPTIONS': {
             'charset': 'utf8mb4',
@@ -172,7 +185,9 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 # CORS 配置：允许跨域请求
-CORS_ORIGIN_ALLOW_ALL = True  # 如果设置为True，则允许所有源进行跨域访问
+# 经 Nginx 同源反代部署时可设为 false；跨域开发时保持 true
+CORS_ORIGIN_ALLOW_ALL = os.getenv('CORS_ALLOW_ALL', 'True').lower() in ('true', '1', 'yes')
+CORS_ALLOWED_ORIGINS = [o.strip() for o in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',') if o.strip()]
 CORS_ALLOW_CREDENTIALS = True  # 允许携带 Cookie（Session 认证需要）
 
 # CSRF 配置：允许来自前端的 CSRF 请求

@@ -62,7 +62,6 @@ class Command(BaseCommand):
         # 顶级菜单
         menu_dashboard = self._get_or_create_menu('仪表盘', 'dashboard', 'dashboard/index', 'icon-dashboard', None, 0)
         menu_system = self._get_or_create_menu('系统管理', 'system', '', 'icon-settings', None, 1)
-        menu_monitor_root = self._get_or_create_menu('系统监控', 'monitor', '', 'icon-dashboard', None, 2)
         menu_pve = self._get_or_create_menu('PVE管理', 'pve', '', 'icon-apps', None, 3)
 
         # 系统管理
@@ -74,11 +73,11 @@ class Command(BaseCommand):
         # 系统设置
         menu_system_setting = self._get_or_create_menu('系统设置', 'system-setting', 'system/setting/index', 'icon-settings', menu_system, 6)
 
-        # 系统监控
-        menu_monitor = self._get_or_create_menu('监控概览', 'monitor-dashboard', 'system/monitor/index', 'icon-dashboard', menu_monitor_root, 1)
-        menu_operation_log = self._get_or_create_menu('操作日志', 'operation-log', 'system/operation-log/index', 'icon-file', menu_monitor_root, 2)
-        menu_login_log = self._get_or_create_menu('登录日志', 'login-log', 'system/login-log/index', 'icon-user', menu_monitor_root, 3)
-        menu_tasks = self._get_or_create_menu('任务管理', 'task', 'system/task/index', 'icon-schedule', menu_monitor_root, 4)
+        # 监控与日志（归入系统管理，不单独占一个顶级模块）
+        menu_monitor = self._get_or_create_menu('监控概览', 'monitor-dashboard', 'system/monitor/index', 'icon-dashboard', menu_system, 7)
+        menu_operation_log = self._get_or_create_menu('操作日志', 'operation-log', 'system/operation-log/index', 'icon-file', menu_system, 8)
+        menu_login_log = self._get_or_create_menu('登录日志', 'login-log', 'system/login-log/index', 'icon-user', menu_system, 9)
+        menu_tasks = self._get_or_create_menu('任务管理', 'task', 'system/task/index', 'icon-schedule', menu_system, 10)
         
         # PVE管理
         menu_pve_server = self._get_or_create_menu('PVE服务器管理', 'pve-server', 'pve/server/index', 'icon-computer', menu_pve, 1)
@@ -222,7 +221,7 @@ class Command(BaseCommand):
         role_admin.permissions.set(perms)
         role_admin.menus.set([
             # 顶级
-            menu_dashboard, menu_system, menu_monitor_root, menu_pve,
+            menu_dashboard, menu_system, menu_pve,
             # 系统管理
             menu_user, menu_role, menu_menu, menu_permission, menu_org, menu_system_setting,
             # 系统监控
@@ -304,13 +303,12 @@ class Command(BaseCommand):
                 'is_hidden': False,
             }
         )
-        if not created:
-            menu.title = title
+        if not created and menu.component != component:
+            # 仅同步组件路径（前端路由变更需要跟进）；
+            # title / icon / parent / order 可能已被用户在界面上调整过，
+            # 初始化命令每次容器启动都会执行，覆盖会丢失这些定制。
             menu.component = component
-            menu.icon = icon
-            menu.parent = parent
-            menu.order = order
-            menu.save()
+            menu.save(update_fields=['component'])
         return menu
 
     def _get_or_create_permission(self, name, code, http_method, url_pattern, menu):

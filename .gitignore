@@ -1,33 +1,38 @@
-# Byte-compiled / cache
+# --- 敏感配置 ---
+.env
+.env.*
+!.env.example
+# vben 共享应用变量（标题、命名空间），非敏感，需提交
+!vue-vben-admin/.env
+*.pem
+*.key
+*.crt
+*.csr
+
+# --- Python ---
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Virtual env
 venv/
-.env
+.venv/
 
-# Editor/OS
+# --- Django ---
+backend/db.sqlite3
+backend/staticfiles/
+backend/media/
+
+# --- Node ---
+node_modules/
+dist/
+.turbo/
+
+# --- 编辑器 / 系统 ---
 .DS_Store
 .idea/
 .vscode/
 
-# Django: ignore generated migrations (keep __init__.py)
-backend/apps/**/migrations/*.py
-!backend/apps/**/migrations/__init__.py
-
-# SQLite database (dev)
-backend/db.sqlite3
-
-# Static/media build output
-backend/staticfiles/
-backend/media/
-
-# Node
-front-end/node_modules/
-front-end/dist/
-
-# Docker local files
+# --- 日志 ---
 *.log
 
-mysql-mcp-server/node_modules
+# --- 工具生成 ---
+.ua/
