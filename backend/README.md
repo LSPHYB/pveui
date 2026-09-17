@@ -208,8 +208,8 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': os.getenv('DB_NAME', 'pve'),
         'USER': os.getenv('DB_USER', 'pve'),
-        'PASSWORD': os.getenv('DB_PASSWORD', 'root'),
-        'HOST': os.getenv('DB_HOST', '106.55.160.167'),
+        'PASSWORD': os.getenv('DB_PASSWORD', ''),
+        'HOST': os.getenv('DB_HOST', 'mysql'),
         'PORT': os.getenv('DB_PORT', '3306'),
         'OPTIONS': {
             'charset': 'utf8mb4',
@@ -219,12 +219,15 @@ DATABASES = {
 }
 ```
 
-**环境变量**:
+**环境变量**（统一在仓库根目录 `.env` 中配置，由 docker compose 注入）:
 - `DB_NAME`: 数据库名
 - `DB_USER`: 数据库用户
 - `DB_PASSWORD`: 数据库密码
-- `DB_HOST`: 数据库主机
+- `DB_HOST`: 数据库主机，默认 `mysql`（compose 服务名），本地开发设为 `127.0.0.1`
 - `DB_PORT`: 数据库端口
+- `SECRET_KEY`: Django 密钥，`DEBUG=False` 时必须提供，否则启动报错
+- `ALLOWED_HOSTS`: 逗号分隔的主机名，默认 `*`
+- `CORS_ALLOW_ALL` / `CORS_ALLOWED_ORIGINS`: 跨域控制，同源反代部署时可关闭
 
 ---
 
