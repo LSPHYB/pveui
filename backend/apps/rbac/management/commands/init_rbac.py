@@ -70,14 +70,9 @@ class Command(BaseCommand):
         menu_menu = self._get_or_create_menu('菜单管理', 'menu', 'system/menu/index', 'icon-menu', menu_system, 3)
         menu_permission = self._get_or_create_menu('权限管理', 'permission', 'system/permission/index', 'icon-safe', menu_system, 4)
         menu_org = self._get_or_create_menu('组织管理', 'organization', 'system/organization/index', 'icon-apps', menu_system, 5)
-        # 系统设置
-        menu_system_setting = self._get_or_create_menu('系统设置', 'system-setting', 'system/setting/index', 'icon-settings', menu_system, 6)
-
         # 监控与日志（归入系统管理，不单独占一个顶级模块）
-        menu_monitor = self._get_or_create_menu('监控概览', 'monitor-dashboard', 'system/monitor/index', 'icon-dashboard', menu_system, 7)
         menu_operation_log = self._get_or_create_menu('操作日志', 'operation-log', 'system/operation-log/index', 'icon-file', menu_system, 8)
         menu_login_log = self._get_or_create_menu('登录日志', 'login-log', 'system/login-log/index', 'icon-user', menu_system, 9)
-        menu_tasks = self._get_or_create_menu('任务管理', 'task', 'system/task/index', 'icon-schedule', menu_system, 10)
         
         # PVE管理
         menu_pve_server = self._get_or_create_menu('PVE服务器管理', 'pve-server', 'pve/server/index', 'icon-computer', menu_pve, 1)
@@ -100,7 +95,22 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(
                 '  ✓ 移除遗留菜单「全局任务中心」（web-antd 无对应页面）'))
 
-        self.stdout.write(self.style.SUCCESS('  ✓ 创建菜单: 系统管理 / 系统监控 / PVE管理 分组完成'))
+        # 清理已移除的菜单：监控概览 / 系统设置 / 任务管理。
+        # 三个页面已从前端删除，菜单留在库里会让前端注册出无效路由。
+        # 对应接口仍然保留，因此权限改挂到「系统管理」而不是一并删除。
+        for legacy_path, legacy_title in (
+            ('monitor-dashboard', '监控概览'),
+            ('system-setting', '系统设置'),
+            ('task', '任务管理'),
+        ):
+            obsolete = Menu.objects.filter(path=legacy_path).first()
+            if obsolete:
+                Permission.objects.filter(menu=obsolete).update(menu=menu_system)
+                obsolete.delete()
+                self.stdout.write(self.style.WARNING(
+                    f'  ✓ 移除菜单「{legacy_title}」（前端页面已删除）'))
+
+        self.stdout.write(self.style.SUCCESS('  ✓ 创建菜单: 系统管理 / PVE管理 分组完成'))
 
         # 3. 创建权限
         self.stdout.write('创建权限...')
@@ -139,28 +149,12 @@ class Command(BaseCommand):
         perms.append(self._get_or_create_permission('组织更新', 'organization:update', 'PUT', '/api/rbac/organizations/', menu_org))
         perms.append(self._get_or_create_permission('组织删除', 'organization:delete', 'DELETE', '/api/rbac/organizations/', menu_org))
         
-        # 系统监控权限
-        perms.append(self._get_or_create_permission('系统监控查看', 'system:metrics', 'GET', '/api/rbac/system/metrics/', menu_monitor))
-        # 任务管理权限（归属监控）
-        perms.append(self._get_or_create_permission('任务列表', 'tasks:list', 'GET', '/api/tasks/tasks/', menu_tasks))
-        perms.append(self._get_or_create_permission('任务创建', 'tasks:create', 'POST', '/api/tasks/tasks/', menu_tasks))
-        perms.append(self._get_or_create_permission('任务更新', 'tasks:update', 'PUT', r'/api/tasks/tasks/\\d+/', menu_tasks))
-        perms.append(self._get_or_create_permission('任务删除', 'tasks:delete', 'DELETE', r'/api/tasks/tasks/\\d+/', menu_tasks))
-        perms.append(self._get_or_create_permission('任务立即执行', 'tasks:run_now', 'POST', r'/api/tasks/tasks/\\d+/run_now/', menu_tasks))
         # 操作日志权限
         perms.append(self._get_or_create_permission('操作日志列表', 'operation_log:list', 'GET', '/api/audit/logs/', menu_operation_log))
         perms.append(self._get_or_create_permission('操作日志查看', 'operation_log:view', 'GET', r'/api/audit/logs/\d+/', menu_operation_log))
         # 登录日志权限（归属监控）
         perms.append(self._get_or_create_permission('登录日志列表', 'login_log:list', 'GET', '/api/audit/login-logs/', menu_login_log))
         perms.append(self._get_or_create_permission('登录日志查看', 'login_log:view', 'GET', r'/api/audit/login-logs/\\d+/', menu_login_log))
-        # 系统设置权限（归属系统管理）
-        perms.append(self._get_or_create_permission('系统设置列表', 'system_setting:list', 'GET', '/api/system/settings/', menu_system_setting))
-        perms.append(self._get_or_create_permission('系统设置创建', 'system_setting:create', 'POST', '/api/system/settings/', menu_system_setting))
-        perms.append(self._get_or_create_permission('系统设置更新', 'system_setting:update', 'PUT', r'/api/system/settings/\\d+/', menu_system_setting))
-        perms.append(self._get_or_create_permission('系统设置部分更新', 'system_setting:partial_update', 'PATCH', r'/api/system/settings/\\d+/', menu_system_setting))
-        perms.append(self._get_or_create_permission('系统设置删除', 'system_setting:delete', 'DELETE', r'/api/system/settings/\\d+/', menu_system_setting))
-        perms.append(self._get_or_create_permission('系统设置批量更新', 'system_setting:bulk_update', 'POST', '/api/system/settings/bulk_update/', menu_system_setting))
-        perms.append(self._get_or_create_permission('系统设置按键获取', 'system_setting:get_by_key', 'GET', '/api/system/settings/get_by_key/', menu_system_setting))
 
 
         # PVE服务器管理权限
@@ -177,6 +171,10 @@ class Command(BaseCommand):
         perms.append(self._get_or_create_permission('PVE服务器存储内容', 'pve_server:storage_content', 'GET', r'/api/pve/servers/\\d+/nodes/[^/]+/storage/[^/]+/content/', menu_pve_server))
         perms.append(self._get_or_create_permission('PVE服务器存储上传', 'pve_server:storage_upload', 'POST', r'/api/pve/servers/\\d+/nodes/[^/]+/storage/[^/]+/upload/', menu_pve_server))
         perms.append(self._get_or_create_permission('PVE服务器存储ISO列表', 'pve_server:storage_iso', 'GET', r'/api/pve/servers/\\d+/nodes/[^/]+/storage/[^/]+/iso/', menu_pve_server))
+        # 注意：url_pattern 只支持 * 通配符与 {id} 占位符，裸正则（\d+ / [^/]+）
+        # 会被 RBACPermission._url_pattern_to_regex 的 re.escape 转义掉而永不匹配。
+        # 新增权限一律使用受支持的语法。
+        perms.append(self._get_or_create_permission('PVE节点Shell', 'pve_server:shell', 'POST', '/api/pve/servers/{id}/shell-session/', menu_pve_server))
         perms.append(self._get_or_create_permission('PVE节点监控查看', 'pve_node:monitor', 'GET', r'/api/pve/servers/\\d+/nodes/[^/]+/monitor/', menu_pve_node_monitor))
         # 全局任务中心权限
         perms.append(self._get_or_create_permission('全局任务列表', 'pve_tasks:global_tasks', 'GET', '/api/pve/servers/global-tasks/', menu_pve))
@@ -186,6 +184,9 @@ class Command(BaseCommand):
         perms.append(self._get_or_create_permission('模板上传', 'pve_templates:upload', 'POST', r'/api/pve/servers/\\d+/nodes/[^/]+/storage/[^/]+/upload/', menu_pve_templates))
         # 网络管理权限
         perms.append(self._get_or_create_permission('网络接口列表', 'pve_network:list', 'GET', r'/api/pve/servers/\\d+/nodes/[^/]+/network/', menu_pve_network))
+        perms.append(self._get_or_create_permission('网络设备创建', 'pve_network:create', 'POST', '/api/pve/servers/{id}/nodes/*/network/', menu_pve_network))
+        perms.append(self._get_or_create_permission('网络配置应用', 'pve_network:apply', 'PUT', '/api/pve/servers/{id}/nodes/*/network/', menu_pve_network))
+        perms.append(self._get_or_create_permission('网络配置回滚', 'pve_network:revert', 'DELETE', '/api/pve/servers/{id}/nodes/*/network/', menu_pve_network))
         
         # PVE 存储管理权限
         perms.append(self._get_or_create_permission('PVE存储服务器列表', 'pve_storage:servers', 'GET', '/api/pve/servers/', menu_pve_storage))
@@ -233,9 +234,9 @@ class Command(BaseCommand):
             # 顶级
             menu_dashboard, menu_system, menu_pve,
             # 系统管理
-            menu_user, menu_role, menu_menu, menu_permission, menu_org, menu_system_setting,
+            menu_user, menu_role, menu_menu, menu_permission, menu_org,
             # 系统监控
-            menu_monitor, menu_operation_log, menu_login_log, menu_tasks,
+            menu_operation_log, menu_login_log,
             # PVE管理
             menu_pve_server, menu_pve_vm, menu_pve_storage, menu_pve_node_monitor, menu_pve_templates, menu_pve_network, menu_pve_topology, menu_pve_lxc,
         ])

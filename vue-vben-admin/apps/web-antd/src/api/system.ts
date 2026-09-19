@@ -26,7 +26,3 @@ export interface DashboardData {
 export async function getDashboardDataApi() {
   return requestClient.get<DashboardData>('/rbac/dashboard/');
 }
-
-export async function getSystemMetricsApi() {
-  return requestClient.get('/rbac/system/metrics/');
-}
