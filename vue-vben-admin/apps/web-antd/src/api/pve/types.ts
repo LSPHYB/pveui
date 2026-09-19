@@ -142,3 +142,61 @@ export interface PveNetworkInterface {
   comments?: string;
   [key: string]: any;
 }
+
+/** 当前支持新增的网络设备类型 */
+export type PveNetworkType = 'bond' | 'bridge' | 'vlan';
+
+export type PveBondMode =
+  | '802.3ad'
+  | 'active-backup'
+  | 'balance-alb'
+  | 'balance-rr'
+  | 'balance-tlb'
+  | 'balance-xor'
+  | 'broadcast';
+
+export type PveBondHashPolicy = 'layer2' | 'layer2+3' | 'layer3+4';
+
+/**
+ * 创建网络设备的参数，字段名与 PVE API 保持一致
+ * （POST /nodes/{node}/network）
+ */
+export interface CreateNetworkParams {
+  iface: string;
+  type: PveNetworkType;
+
+  // 通用
+  autostart?: boolean;
+  cidr?: string;
+  cidr6?: string;
+  comments?: string;
+  gateway?: string;
+  gateway6?: string;
+  mtu?: number | undefined;
+
+  // bridge
+  bridge_ports?: string;
+  bridge_vids?: string;
+  bridge_vlan_aware?: boolean;
+
+  // bond
+  'bond-primary'?: string;
+  bond_mode?: PveBondMode;
+  bond_xmit_hash_policy?: PveBondHashPolicy;
+  slaves?: string;
+
+  // vlan
+  'vlan-id'?: number | undefined;
+  'vlan-raw-device'?: string;
+}
+
+/**
+ * 修改网络设备的参数（PUT /nodes/{node}/network/{iface}）
+ *
+ * iface 由 URL 决定、不可改名；type 不可变更，但 PVE 要求必传。
+ * `delete` 是待清除的字段名列表 —— PVE 不会因为字段缺省就清空原值，
+ * 必须显式声明要删哪些设置。
+ */
+export interface UpdateNetworkParams extends Omit<CreateNetworkParams, 'iface'> {
+  delete?: string[];
+}

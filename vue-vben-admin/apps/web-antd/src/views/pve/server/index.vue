@@ -4,6 +4,7 @@ import type { CreateNodeParams, PVEServerModel } from '#/api/pve/types';
 import { onMounted, reactive, ref } from 'vue';
 
 import {
+  CodeOutlined,
   DeleteOutlined,
   EditOutlined,
   PlusOutlined,
@@ -35,9 +36,21 @@ import {
 } from '#/api/pve/node';
 import { usePermission } from '#/hooks/usePermission';
 
+import NodeShellModal from './NodeShellModal.vue';
+
 defineOptions({
   name: 'PVEServer',
 });
+
+// PVE Shell
+const shellVisible = ref(false);
+const shellServer = ref<PVEServerModel | undefined>();
+
+// Table 的 bodyCell 插槽丢失了行类型，在入口处收敛一次
+const handleShell = (row: Record<string, any>) => {
+  shellServer.value = row as PVEServerModel;
+  shellVisible.value = true;
+};
 
 // Permission checking
 const { hasPermission } = usePermission();
@@ -259,6 +272,16 @@ onMounted(() => {
                 测试连接
               </Button>
               <Button
+                v-if="hasPermission('pve_server:shell')"
+                size="small"
+                type="link"
+                :disabled="!record.is_active"
+                @click="handleShell(record)"
+              >
+                <template #icon><CodeOutlined /></template>
+                Shell
+              </Button>
+              <Button
                 v-if="hasPermission('pve_server:update')"
                 size="small"
                 type="link"
@@ -352,5 +375,7 @@ onMounted(() => {
         </Form.Item>
       </Form>
     </Modal>
+
+    <NodeShellModal v-model:open="shellVisible" :server="shellServer" />
   </div>
 </template>

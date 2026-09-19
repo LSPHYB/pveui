@@ -56,7 +56,11 @@ from .serializers import (
     LXCContainerCloneSerializer,
 )
 from .pve_client import PVEAPIClient
-from .consumers import SESSION_CACHE_PREFIX
+from .consumers import (
+    SESSION_CACHE_PREFIX,
+    NODE_SHELL_CACHE_PREFIX,
+    NODE_SHELL_SESSION_TTL,
+)
 
 logger = logging.getLogger(__name__)
 PVE_CONSOLE_SESSION_TTL = getattr(settings, 'PVE_CONSOLE_SESSION_TTL', 60)
@@ -246,11 +250,64 @@ class PVEServerViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, ActionSeri
                 'detail': f'上传失败: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
     
-    @action(detail=True, methods=['get'], url_path='nodes/(?P<node>[^/.]+)/network')
+    # PVE POST /nodes/{node}/network 支持的参数白名单，取自 PVE API schema。
+    # 只放行这些键，避免把前端任意字段透传给 PVE。
+    NETWORK_STR_PARAMS = {
+        'iface', 'type', 'address', 'address6', 'cidr', 'cidr6',
+        'gateway', 'gateway6', 'netmask', 'comments', 'comments6',
+        'bridge_ports', 'bridge_vids', 'slaves', 'bond_mode',
+        'bond_xmit_hash_policy', 'bond-primary', 'vlan-raw-device',
+    }
+    NETWORK_INT_PARAMS = {'mtu', 'vlan-id', 'netmask6'}
+    NETWORK_BOOL_PARAMS = {'autostart', 'bridge_vlan_aware'}
+    NETWORK_TYPES = {'bridge', 'bond', 'vlan'}
+
+    def _build_network_params(self, data):
+        """
+        按白名单把前端数据转成 PVE 参数。
+
+        布尔转 1/0，整数强转，未知字段直接丢弃。
+        `delete` 为待清除字段列表（PVE 要求显式声明，否则保留原值）。
+        """
+        params = {}
+        for key, value in data.items():
+            if key == 'delete':
+                # 只允许清除白名单内的字段
+                if isinstance(value, (list, tuple, set)):
+                    fields = list(value)
+                else:
+                    fields = [f.strip() for f in str(value).split(',')]
+                allowed = (self.NETWORK_STR_PARAMS | self.NETWORK_INT_PARAMS
+                           | self.NETWORK_BOOL_PARAMS) - {'iface', 'type'}
+                fields = [f for f in fields if f in allowed]
+                if fields:
+                    params['delete'] = ','.join(fields)
+                continue
+            if value is None or value == '':
+                continue
+            if key in self.NETWORK_BOOL_PARAMS:
+                params[key] = 1 if value in (True, 1, '1', 'true', 'True') else 0
+            elif key in self.NETWORK_INT_PARAMS:
+                try:
+                    params[key] = int(value)
+                except (TypeError, ValueError):
+                    raise ValueError(f'参数 {key} 必须是整数，收到: {value!r}')
+            elif key in self.NETWORK_STR_PARAMS:
+                params[key] = str(value).strip()
+        return params
+
+    @action(detail=True, methods=['get', 'post', 'put', 'delete'], url_path='nodes/(?P<node>[^/.]+)/network')
     def node_network(self, request, pk=None, node=None):
-        """获取节点网络接口列表。"""
+        """
+        节点网络接口管理。
+
+        GET    列出网络接口
+        POST   创建网络设备（写入待应用配置，不会立即生效）
+        PUT    应用（重载）待生效的网络配置
+        DELETE 回滚尚未应用的变更
+        """
         server = self.get_object()
-        
+
         try:
             client = PVEAPIClient(
                 host=server.host,
@@ -259,12 +316,205 @@ class PVEServerViewSet(DataScopeFilterMixin, AuditOwnerPopulateMixin, ActionSeri
                 token_secret=server.token_secret,
                 verify_ssl=server.verify_ssl
             )
-            
-            network = client.get_network(node)
-            return Response(network)
-        except Exception as e:
+
+            method = request.method.lower()
+
+            if method == 'get':
+                network = client.get_network(node)
+                return Response(network)
+
+            if method == 'put':
+                result = client.reload_network(node)
+                return Response({
+                    'success': True,
+                    'message': '网络配置已应用',
+                    'result': result
+                })
+
+            if method == 'delete':
+                client.revert_network(node)
+                return Response({
+                    'success': True,
+                    'message': '已回滚未应用的网络变更'
+                })
+
+            # POST：创建
+            data = request.data or {}
+            iface = str(data.get('iface') or '').strip()
+            iface_type = str(data.get('type') or '').strip()
+            if not iface:
+                return Response({'detail': '接口名称（iface）不能为空'},
+                                status=status.HTTP_400_BAD_REQUEST)
+            if iface_type not in self.NETWORK_TYPES:
+                return Response({
+                    'detail': f"不支持的网络类型: {iface_type or '(空)'}，"
+                              f"当前仅支持 {', '.join(sorted(self.NETWORK_TYPES))}"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            params = self._build_network_params(data)
+
+            result = client.create_network(node, params)
             return Response({
-                'detail': f'获取网络接口失败: {str(e)}'
+                'success': True,
+                'message': f'{iface} 已创建，需点击「应用配置」后生效',
+                'result': result
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            action_name = {
+                'get': '获取网络接口',
+                'post': '创建网络设备',
+                'put': '应用网络配置',
+                'delete': '回滚网络配置',
+            }.get(request.method.lower(), '网络操作')
+            return Response({
+                'detail': f'{action_name}失败: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='shell-session')
+    def shell_session(self, request, pk=None):
+        """
+        创建 PVE 节点 Shell 会话，返回一次性 WebSocket 代理地址。
+
+        必须传入 PVE 用户名/密码：termproxy 不接受 API Token（验票时会把
+        token 值当密码去调 /access/ticket，必然失败）。凭据仅用于换取
+        ticket，不落库、不返回给前端。
+        """
+        server = self.get_object()
+        node = str(request.data.get('node') or '').strip()
+        username = str(request.data.get('username') or '').strip()
+        password = request.data.get('password') or ''
+
+        if not node:
+            return Response({'detail': '请指定节点'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if not username or not password:
+            return Response({'detail': '请提供 PVE 用户名与密码'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if '@' not in username:
+            return Response({'detail': '用户名需带 realm，例如 root@pam'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+
+            auth = PVEAPIClient.create_ticket(
+                host=server.host,
+                port=server.port,
+                username=username,
+                password=password,
+                verify_ssl=server.verify_ssl,
+            )
+            proxy = client.create_termproxy(
+                node,
+                ticket=auth['ticket'],
+                csrf_token=auth.get('CSRFPreventionToken', ''),
+            )
+
+            port = proxy.get('port')
+            vnc_ticket = proxy.get('ticket')
+            shell_user = proxy.get('user') or auth.get('username') or username
+            if not port or not vnc_ticket:
+                raise Exception('PVE 未返回有效的 termproxy 信息')
+
+            websocket_url = (
+                f"wss://{server.host}:{server.port}/api2/json/nodes/{node}/"
+                f"vncwebsocket?port={port}&vncticket={quote_plus(vnc_ticket)}"
+            )
+
+            session_token = secrets.token_urlsafe(32)
+            proxy_path = f"/ws/pve/shell/{server.id}/?token={session_token}"
+            cache.set(f'{NODE_SHELL_CACHE_PREFIX}{session_token}', {
+                'websocket_url': websocket_url,
+                # auth_ticket 用于 WS 握手时的 Cookie，vnc_ticket 用于终端握手
+                'auth_ticket': auth['ticket'],
+                'vnc_ticket': vnc_ticket,
+                'user': shell_user,
+                'server_id': server.id,
+                'node': node,
+            }, timeout=NODE_SHELL_SESSION_TTL)
+
+            proxy_scheme = 'wss' if request.is_secure() else 'ws'
+            return Response({
+                'proxy_path': proxy_path,
+                'proxy_url': f"{proxy_scheme}://{request.get_host()}{proxy_path}",
+                'node': node,
+                'user': shell_user,
+            })
+        except Exception as e:
+            logger.exception('创建 PVE Shell 会话失败')
+            return Response({'detail': f'创建 Shell 会话失败: {str(e)}'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+    # iface 允许包含点号（VLAN 接口形如 eno1.100），因此不能沿用 [^/.]+
+    @action(detail=True, methods=['get', 'put', 'delete'],
+            url_path=r'nodes/(?P<node>[^/.]+)/network/(?P<iface>[^/]+)')
+    def node_network_iface(self, request, pk=None, node=None, iface=None):
+        """
+        单个网络接口的读取 / 修改 / 删除。
+
+        GET    读取该接口配置
+        PUT    修改配置（写入待应用配置，不会立即生效）
+        DELETE 删除该接口（同样需要「应用配置」后生效）
+        """
+        server = self.get_object()
+
+        try:
+            client = PVEAPIClient(
+                host=server.host,
+                port=server.port,
+                token_id=server.token_id,
+                token_secret=server.token_secret,
+                verify_ssl=server.verify_ssl
+            )
+
+            method = request.method.lower()
+
+            if method == 'get':
+                return Response(client.get_network_iface(node, iface))
+
+            if method == 'delete':
+                client.delete_network(node, iface)
+                return Response({
+                    'success': True,
+                    'message': f'{iface} 已删除，需点击「应用配置」后生效'
+                })
+
+            # PUT：修改
+            data = request.data or {}
+            iface_type = str(data.get('type') or '').strip()
+            if iface_type not in self.NETWORK_TYPES:
+                return Response({
+                    'detail': f"不支持的网络类型: {iface_type or '(空)'}，"
+                              f"当前仅支持 {', '.join(sorted(self.NETWORK_TYPES))}"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            params = self._build_network_params(data)
+            # iface 由 URL 决定，不允许通过 body 改名
+            params['iface'] = iface
+            params['type'] = iface_type
+
+            client.update_network(node, iface, params)
+            return Response({
+                'success': True,
+                'message': f'{iface} 已修改，需点击「应用配置」后生效'
+            })
+        except ValueError as e:
+            return Response({'detail': str(e)},
+                            status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            action_name = {
+                'get': '读取网络接口配置',
+                'put': '修改网络设备',
+                'delete': '删除网络设备',
+            }.get(request.method.lower(), '网络操作')
+            return Response({
+                'detail': f'{action_name}失败: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['get'], url_path='nodes/(?P<node>[^/.]+)/qemu')

@@ -469,7 +469,116 @@ class PVEAPIClient:
         """获取网络接口列表。"""
         result = self._request('GET', f'/nodes/{node}/network')
         return result if isinstance(result, list) else [result] if result else []
-    
+
+    def create_network(self, node: str, params: Dict) -> Dict:
+        """
+        创建网络设备配置（bridge / bond / vlan 等）。
+
+        注意：PVE 只把配置写入 /etc/network/interfaces.new，不会立即生效，
+        需要再调用 reload_network() 才会真正应用。
+
+        Args:
+            node: 节点名称
+            params: 网络配置参数（必须包含 iface 与 type）
+        """
+        if not params:
+            raise ValueError("params 不能为空")
+        # 与创建虚拟机/容器一致：PVE 创建类接口使用 URL 参数（表单格式）
+        result = self._request('POST', f'/nodes/{node}/network', params=params)
+        return result if isinstance(result, dict) else {}
+
+    @staticmethod
+    def create_ticket(host: str, port: int, username: str, password: str,
+                      verify_ssl: bool = False) -> Dict:
+        """
+        用用户名/密码换取 PVE ticket（等价于 Web UI 登录）。
+
+        termproxy 不接受 API Token：它验票时会把 token 值当密码去调
+        /access/ticket，token 不是合法用户名，必然 401。所以 Shell 功能
+        必须走真实用户的 ticket。
+
+        Args:
+            username: 完整用户名，需带 realm，如 root@pam
+        Returns:
+            {'ticket': ..., 'CSRFPreventionToken': ..., 'username': ...}
+        """
+        url = f"https://{host}:{port}/api2/json/access/ticket"
+        response = requests.post(
+            url,
+            data={'username': username, 'password': password},
+            verify=verify_ssl,
+            timeout=30,
+        )
+        if response.status_code >= 400:
+            raise Exception('PVE 登录失败：用户名或密码错误')
+        data = (response.json() or {}).get('data') or {}
+        if not data.get('ticket'):
+            raise Exception('PVE 未返回有效 ticket')
+        return data
+
+    def create_termproxy(self, node: str, ticket: str, csrf_token: str) -> Dict:
+        """
+        创建节点 Shell 的 termproxy 会话。
+
+        必须用 ticket（Cookie 认证）而非 API Token，见 create_ticket 说明。
+        需要该用户在 /nodes/<node> 上具备 Sys.Console 权限。
+
+        Returns:
+            {'port': ..., 'ticket': ..., 'user': ..., 'upid': ...}
+        """
+        url = f"https://{self.host}:{self.port}/api2/json/nodes/{node}/termproxy"
+        response = requests.post(
+            url,
+            headers={'CSRFPreventionToken': csrf_token},
+            cookies={'PVEAuthCookie': ticket},
+            verify=self.verify_ssl,
+            timeout=30,
+        )
+        if response.status_code >= 400:
+            detail = ''
+            try:
+                detail = str((response.json() or {}).get('errors') or '')
+            except Exception:
+                detail = response.text or ''
+            raise Exception(
+                f'创建 Shell 会话失败 (HTTP {response.status_code}): {detail}'
+                ' —— 请确认该用户在该节点上具有 Sys.Console 权限'
+            )
+        return (response.json() or {}).get('data') or {}
+
+    def get_network_iface(self, node: str, iface: str) -> Dict:
+        """读取单个网络接口的配置。"""
+        result = self._request('GET', f'/nodes/{node}/network/{iface}')
+        return result if isinstance(result, dict) else {}
+
+    def update_network(self, node: str, iface: str, params: Dict) -> Dict:
+        """
+        修改网络设备配置。
+
+        同 create_network，改动只写入待应用配置，需再调用 reload_network()。
+        注意：要清空某个已有设置必须把字段名放进 params['delete']（逗号分隔），
+        仅仅不传该字段 PVE 会保留原值。
+        """
+        if not params:
+            raise ValueError("params 不能为空")
+        result = self._request('PUT', f'/nodes/{node}/network/{iface}', params=params)
+        return result if isinstance(result, dict) else {}
+
+    def delete_network(self, node: str, iface: str) -> Dict:
+        """删除网络设备配置（需 reload_network() 后生效）。"""
+        result = self._request('DELETE', f'/nodes/{node}/network/{iface}')
+        return result if isinstance(result, dict) else {}
+
+    def reload_network(self, node: str) -> Dict:
+        """应用（重载）待生效的网络配置。返回 UPID。"""
+        result = self._request('PUT', f'/nodes/{node}/network')
+        return result if isinstance(result, dict) else {'upid': result}
+
+    def revert_network(self, node: str) -> Dict:
+        """回滚尚未应用的网络配置变更。"""
+        result = self._request('DELETE', f'/nodes/{node}/network')
+        return result if isinstance(result, dict) else {}
+
     def get_task_status(self, node: str, upid: str) -> Dict:
         """获取任务状态。"""
         return self._request('GET', f'/nodes/{node}/tasks/{upid}/status')

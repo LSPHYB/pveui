@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 SESSION_CACHE_PREFIX = "pve_console_session:"
 SESSION_CACHE_TTL = 60  # 秒
 
+NODE_SHELL_CACHE_PREFIX = "pve_node_shell_session:"
+NODE_SHELL_SESSION_TTL = 60  # 秒，一次性令牌
+
 
 class PVEConsoleConsumer(AsyncWebsocketConsumer):
     """代理浏览器与PVE之间的VNC WebSocket流量。"""
@@ -515,3 +518,153 @@ class SSHConsoleConsumer(AsyncWebsocketConsumer):
             return password if password else None
         except LXCContainer.DoesNotExist:
             return None
+
+
+class NodeShellConsumer(AsyncWebsocketConsumer):
+    """
+    PVE 节点 Shell：把浏览器的终端流量转发到 PVE termproxy。
+
+    对浏览器暴露的是与 SSHConsoleConsumer 一致的 JSON 协议
+    （{'type': 'input'|'resize'}），termproxy 那套 `0:len:data` 分帧和
+    `user:ticket\n` 握手全部在这里完成 —— 这样 PVE ticket 不会下发到浏览器。
+    """
+
+    PING_INTERVAL = 30  # termproxy 5 分钟无数据会断开
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pve_ws = None
+        self.relay_task = None
+        self.ping_task = None
+
+    async def connect(self):
+        token = self._get_query_token()
+        if not token:
+            logger.warning('NodeShellConsumer: 缺少 token')
+            await self.close()
+            return
+
+        cache_key = f'{NODE_SHELL_CACHE_PREFIX}{token}'
+        session = cache.get(cache_key)
+        cache.delete(cache_key)  # 一次性使用
+        if not session:
+            logger.warning('NodeShellConsumer: 会话不存在或已过期')
+            await self.close()
+            return
+
+        server_id = self.scope['url_route']['kwargs'].get('server_id')
+        if str(session.get('server_id')) != str(server_id):
+            logger.warning('NodeShellConsumer: 服务器 ID 不匹配')
+            await self.close()
+            return
+
+        tls_context = ssl.create_default_context()
+        tls_context.check_hostname = False
+        tls_context.verify_mode = ssl.CERT_NONE
+
+        try:
+            self.pve_ws = await websockets.connect(
+                session['websocket_url'],
+                ssl=tls_context,
+                max_size=None,
+                ping_interval=None,
+                extra_headers={'Cookie': f"PVEAuthCookie={session['auth_ticket']}"},
+                subprotocols=['binary'],
+            )
+        except Exception as e:
+            logger.exception('NodeShellConsumer: 连接 PVE termproxy 失败: %s', e)
+            await self.accept()
+            await self.send(text_data=f'\r\n\x1b[31m连接 PVE Shell 失败: {e}\x1b[0m\r\n')
+            await self.close()
+            return
+
+        await self.accept()
+
+        # termproxy 握手：<user>:<vncticket>\n，成功后 PVE 回 "OK"
+        try:
+            await self.pve_ws.send(f"{session['user']}:{session['vnc_ticket']}\n")
+        except Exception as e:
+            logger.exception('NodeShellConsumer: 握手失败: %s', e)
+            await self.send(text_data=f'\r\n\x1b[31mShell 握手失败: {e}\x1b[0m\r\n')
+            await self.close()
+            return
+
+        self.relay_task = asyncio.create_task(self._relay_from_pve())
+        self.ping_task = asyncio.create_task(self._keepalive())
+
+    async def disconnect(self, close_code):
+        for task in (self.relay_task, self.ping_task):
+            if task:
+                task.cancel()
+        if self.pve_ws:
+            try:
+                await self.pve_ws.close()
+            except Exception:
+                pass
+            self.pve_ws = None
+
+    async def receive(self, text_data=None, bytes_data=None):
+        if not self.pve_ws or text_data is None:
+            return
+        try:
+            payload = json.loads(text_data)
+        except (TypeError, ValueError):
+            return
+
+        msg_type = payload.get('type')
+        try:
+            if msg_type == 'input':
+                data = payload.get('data', '')
+                # 长度按 UTF-8 字节数计算，不是字符数
+                length = len(data.encode('utf-8'))
+                await self.pve_ws.send(f'0:{length}:{data}')
+            elif msg_type == 'resize':
+                cols = int(payload.get('cols') or 80)
+                rows = int(payload.get('rows') or 24)
+                await self.pve_ws.send(f'1:{cols}:{rows}:')
+        except websockets.ConnectionClosed:
+            await self.close()
+        except (TypeError, ValueError):
+            logger.warning('NodeShellConsumer: 非法的 resize 参数')
+
+    async def _relay_from_pve(self):
+        """PVE -> 浏览器。首帧是握手结果 'OK'，不写入终端。"""
+        first = True
+        try:
+            async for message in self.pve_ws:
+                text = (message.decode('utf-8', errors='replace')
+                        if isinstance(message, (bytes, bytearray)) else message)
+                if first:
+                    first = False
+                    if text.strip() == 'OK':
+                        continue
+                    # 未返回 OK 说明握手被拒
+                    await self.send(
+                        text_data=f'\r\n\x1b[31mPVE 拒绝了 Shell 握手: {text}\x1b[0m\r\n'
+                    )
+                    break
+                await self.send(text_data=text)
+        except websockets.ConnectionClosed:
+            logger.info('NodeShellConsumer: PVE 连接已关闭')
+        except Exception as e:
+            logger.exception('NodeShellConsumer: 转发异常: %s', e)
+        finally:
+            await self.close()
+
+    async def _keepalive(self):
+        """termproxy 空闲 5 分钟会断，定期发 '2' 保活。"""
+        try:
+            while True:
+                await asyncio.sleep(self.PING_INTERVAL)
+                if not self.pve_ws:
+                    return
+                await self.pve_ws.send('2')
+        except (asyncio.CancelledError, websockets.ConnectionClosed):
+            return
+        except Exception:
+            return
+
+    def _get_query_token(self):
+        params = parse_qs(self.scope.get('query_string', b'').decode())
+        tokens = params.get('token')
+        return tokens[0] if tokens else None

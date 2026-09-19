@@ -21,10 +21,12 @@ class JWTAuthMiddleware(BaseMiddleware):
         if scope["type"] != "websocket":
             return await super().__call__(scope, receive, send)
 
-        # SSH Console 使用自己的 session token 验证机制，跳过 JWT 验证
+        # 这些通道用自己的一次性 session token 验证，跳过 JWT
+        # （不跳过的话，session token 会被当成 JWT 解析并打出误导性的
+        #  "Token is invalid or expired" 告警）
         path = scope.get("path", "")
-        if "/ws/ssh/" in path:
-            # SSH Console 会在 connect() 方法中验证 session token
+        if "/ws/ssh/" in path or "/ws/pve/shell/" in path:
+            # 由 Consumer 在 connect() 中验证 session token
             scope["user"] = AnonymousUser()  # 设置为匿名用户，由 Consumer 自己验证
             return await super().__call__(scope, receive, send)
 

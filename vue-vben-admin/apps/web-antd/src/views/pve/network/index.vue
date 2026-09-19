@@ -1,13 +1,28 @@
 <script setup lang="ts">
-import type { PveNetworkInterface, PVEServerModel } from '#/api/pve/types';
+import type {
+  PveNetworkInterface,
+  PveNetworkType,
+  PVEServerModel,
+} from '#/api/pve/types';
 
 import { computed, onMounted, ref, watch } from 'vue';
 
-import { ClusterOutlined, ReloadOutlined } from '@ant-design/icons-vue';
+import {
+  CheckCircleOutlined,
+  ClusterOutlined,
+  DownOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  UndoOutlined,
+} from '@ant-design/icons-vue';
 import {
   Button,
   Card,
+  Dropdown,
+  Menu,
+  MenuItem,
   message,
+  Modal,
   Select,
   Space,
   Table,
@@ -15,10 +30,15 @@ import {
 } from 'ant-design-vue';
 
 import {
+  applyNodeNetworkApi,
+  deleteNodeNetworkApi,
   getNodeListApi,
   getNodeNetworkApi,
   getPveNodesApi,
+  revertNodeNetworkApi,
 } from '#/api/pve/node';
+
+import CreateNetworkModal from './CreateNetworkModal.vue';
 
 defineOptions({
   name: 'PVENetwork',
@@ -43,7 +63,11 @@ const columns = [
   { title: 'IP/CIDR', key: 'address', width: 150 },
   { title: '网关', dataIndex: 'gateway', key: 'gateway', width: 120 },
   { title: '备注', dataIndex: 'comments', key: 'comments' },
+  { title: '操作', key: 'action', width: 130, fixed: 'right' as const },
 ];
+
+/** 仅这三类由本系统管理，物理网卡等不提供编辑/删除 */
+const EDITABLE_TYPES = new Set(['bond', 'bridge', 'vlan']);
 
 // Actions
 const fetchServers = async () => {
@@ -70,7 +94,7 @@ const fetchServers = async () => {
 
     // Auto select first
     if (!selectedServerId.value && servers.value.length > 0) {
-      selectedServerId.value = servers.value[0].id;
+      selectedServerId.value = servers.value[0]?.id;
     }
   } catch {
     message.error('获取服务器列表失败');
@@ -173,6 +197,106 @@ const filteredList = computed(() => {
   return networkList.value.filter((item) => item.type === filterType.value);
 });
 
+// --- 新增 / 应用配置 ---
+const createOpen = ref(false);
+const createType = ref<PveNetworkType>('bridge');
+const applying = ref(false);
+
+const CREATE_TYPES: { label: string; value: PveNetworkType }[] = [
+  { label: 'Linux Bridge', value: 'bridge' },
+  { label: 'Linux Bond', value: 'bond' },
+  { label: 'Linux VLAN', value: 'vlan' },
+];
+
+const editMode = ref<'create' | 'edit'>('create');
+const editRecord = ref<PveNetworkInterface | undefined>();
+
+const openCreate = (type: PveNetworkType) => {
+  editMode.value = 'create';
+  editRecord.value = undefined;
+  createType.value = type;
+  createOpen.value = true;
+};
+
+// Table 的 bodyCell 插槽丢失了行类型，在入口处收敛一次
+const openEdit = (row: Record<string, any>) => {
+  const record = row as PveNetworkInterface;
+  editMode.value = 'edit';
+  editRecord.value = record;
+  createType.value = record.type as PveNetworkType;
+  createOpen.value = true;
+};
+
+const handleDelete = (row: Record<string, any>) => {
+  const record = row as PveNetworkInterface;
+  if (!selectedServerId.value || !selectedNode.value) return;
+  Modal.confirm({
+    title: `删除网络设备 ${record.iface}`,
+    content:
+      '删除后需点击「应用配置」才会真正生效。若该设备正被虚拟机或其他接口使用，PVE 会拒绝删除。',
+    okText: '删除',
+    okType: 'danger',
+    cancelText: '取消',
+    onOk: async () => {
+      try {
+        await deleteNodeNetworkApi(
+          selectedServerId.value!,
+          selectedNode.value!,
+          record.iface,
+        );
+        message.success(`${record.iface} 已删除，需点击「应用配置」后生效`);
+        await fetchNetwork();
+      } catch (error: any) {
+        message.error(`删除失败: ${error?.message || '未知错误'}`);
+      }
+    },
+  });
+};
+
+const handleApply = () => {
+  if (!selectedServerId.value || !selectedNode.value) return;
+  Modal.confirm({
+    title: '应用网络配置',
+    content:
+      '将重载该节点的网络配置使待生效变更生效。若配置有误可能导致节点网络中断，确认继续？',
+    okText: '应用',
+    okType: 'danger',
+    cancelText: '取消',
+    onOk: async () => {
+      applying.value = true;
+      try {
+        await applyNodeNetworkApi(selectedServerId.value!, selectedNode.value!);
+        message.success('网络配置已应用');
+        await fetchNetwork();
+      } catch (error: any) {
+        message.error(`应用失败: ${error?.message || '未知错误'}`);
+      } finally {
+        applying.value = false;
+      }
+    },
+  });
+};
+
+const handleRevert = () => {
+  if (!selectedServerId.value || !selectedNode.value) return;
+  Modal.confirm({
+    title: '回滚未应用的变更',
+    content: '将丢弃所有尚未应用的网络配置变更，确认继续？',
+    okText: '回滚',
+    okType: 'danger',
+    cancelText: '取消',
+    onOk: async () => {
+      try {
+        await revertNodeNetworkApi(selectedServerId.value!, selectedNode.value!);
+        message.success('已回滚未应用的变更');
+        await fetchNetwork();
+      } catch (error: any) {
+        message.error(`回滚失败: ${error?.message || '未知错误'}`);
+      }
+    },
+  });
+};
+
 // Lifecycle & Watch
 onMounted(() => {
   fetchServers();
@@ -222,6 +346,35 @@ watch(selectedNode, (newVal) => {
               uniqueTypes.map((t) => ({ label: getTypeLabel(t), value: t }))
             "
           />
+
+          <Dropdown :disabled="!selectedNode">
+            <Button type="primary">
+              <template #icon><PlusOutlined /></template>
+              新增
+              <DownOutlined />
+            </Button>
+            <template #overlay>
+              <Menu @click="({ key }) => openCreate(key as PveNetworkType)">
+                <MenuItem v-for="t in CREATE_TYPES" :key="t.value">
+                  {{ t.label }}
+                </MenuItem>
+              </Menu>
+            </template>
+          </Dropdown>
+
+          <Button
+            @click="handleApply"
+            :disabled="!selectedNode"
+            :loading="applying"
+          >
+            <template #icon><CheckCircleOutlined /></template>
+            应用配置
+          </Button>
+
+          <Button @click="handleRevert" :disabled="!selectedNode">
+            <template #icon><UndoOutlined /></template>
+            回滚
+          </Button>
 
           <Button
             @click="fetchNetwork"
@@ -273,8 +426,35 @@ watch(selectedNode, (newVal) => {
             <span v-if="record.gateway">{{ record.gateway }}</span>
             <span v-else class="text-gray-400">-</span>
           </template>
+
+          <template v-else-if="column.key === 'action'">
+            <Space v-if="EDITABLE_TYPES.has(record.type)">
+              <Button type="link" size="small" @click="openEdit(record)">
+                编辑
+              </Button>
+              <Button
+                type="link"
+                size="small"
+                danger
+                @click="handleDelete(record)"
+              >
+                删除
+              </Button>
+            </Space>
+            <span v-else class="text-gray-400">-</span>
+          </template>
         </template>
       </Table>
     </Card>
+
+    <CreateNetworkModal
+      v-model:open="createOpen"
+      :mode="editMode"
+      :type="createType"
+      :record="editRecord"
+      :server-id="selectedServerId"
+      :node="selectedNode"
+      @success="fetchNetwork"
+    />
   </div>
 </template>
