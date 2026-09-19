@@ -29,6 +29,12 @@ export const getStylesheet = (): any[] => [
         const type = ele.data('type') as NodeType;
         return NODE_TYPES[type]?.icon ?? pveNodeIcon;
       },
+      // 留白做在 SVG 里（viewBox 从 48 扩到 78，图形只占 61.5%），
+      // 所以这里用 'contain' 铺满外接正方形后，图形仍然落在圆内。
+      //
+      // 不要改成 'none' + background-width 百分比：那条路径在
+      // devicePixelRatio=2 的屏幕上渲染异常（未选中的节点图标被放大裁切，
+      // 选中的因走独立图层反而正常），DPR=1 时看不出来。
       'background-fit': 'contain',
       'background-clip': 'node',
       'background-opacity': 1,
@@ -42,11 +48,12 @@ export const getStylesheet = (): any[] => [
       'text-valign': 'bottom',
       'text-halign': 'center',
       'font-size': 11,
-      color: '#333',
-      'text-margin-y': 4,
-      'text-background-color': 'rgba(255,255,255,0.85)',
+      color: '#555',
+      // 6px 让标签框脱开圆圈边框，原来的 4px 会压在节点上
+      'text-margin-y': 6,
+      'text-background-color': 'rgba(255,255,255,0.92)',
       'text-background-opacity': 1,
-      'text-background-padding': '2px',
+      'text-background-padding': '3px',
       'text-background-shape': 'roundrectangle',
       'text-wrap': 'wrap',
       'text-max-width': '90px',
