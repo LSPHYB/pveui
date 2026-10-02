@@ -71,7 +71,11 @@ function setupAccessGuard(router: Router) {
         console.log('[Guard] 🔀 已登录访问登录页，重定向到:', redirectPath);
         return redirectPath;
       }
-      return true;
+      // 已登录但菜单还没生成（如在 pve/vm/detail/:id 等详情页直接刷新）时不能跳过，
+      // 否则后端菜单永远不会拉取，侧边栏为空
+      if (!accessStore.accessToken || accessStore.isAccessChecked) {
+        return true;
+      }
     }
 
     // accessToken 检查
@@ -145,7 +149,7 @@ function setupAccessGuard(router: Router) {
     let finalRedirectPath = redirectPath;
     const isRedirectAccessible = accessibleRoutes.some(
       (route) => route.path === redirectPath || route.path === `/${redirectPath}`,
-    ) || coreRouteNames.includes(redirectPath as any);
+    ) || (redirectPath === to.fullPath && coreRouteNames.includes(to.name as string));
 
     if (!isRedirectAccessible && accessibleMenus && accessibleMenus.length > 0) {
       // 提取第一个菜单的最深路径
