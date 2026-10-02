@@ -430,7 +430,7 @@ onMounted(() => {
         padding: 0,
         display: 'flex',
         flexDirection: 'column',
-        background: '#f8fafc',
+        background: 'hsl(var(--background-deep))',
         overflow: 'hidden',
       }"
     >
@@ -462,7 +462,7 @@ onMounted(() => {
       <!-- 历史会话列表（折叠面板） -->
       <div
         v-if="showConvList"
-        class="border-b bg-white"
+        class="border-b bg-card"
         style="max-height: 200px; overflow-y: auto"
       >
         <div
@@ -474,9 +474,9 @@ onMounted(() => {
         <div
           v-for="conv in conversations"
           :key="conv.id"
-          class="group flex items-center justify-between px-4 py-2 hover:bg-gray-50 cursor-pointer text-sm border-b"
+          class="group flex items-center justify-between px-4 py-2 hover:bg-accent cursor-pointer text-sm border-b"
           :class="
-            conv.id === currentConversationId ? 'bg-blue-50 text-blue-600' : ''
+            conv.id === currentConversationId ? 'bg-primary/10 text-primary' : ''
           "
           @click="switchConversation(conv)"
         >
@@ -538,7 +538,7 @@ onMounted(() => {
                 ? 'bg-blue-500 text-white rounded-tr-sm'
                 : msg.isError
                   ? 'bg-red-50 text-red-600 border border-red-200 rounded-tl-sm'
-                  : 'bg-white border border-gray-100 shadow-sm rounded-tl-sm'
+                  : 'bg-card border shadow-sm rounded-tl-sm'
             "
           >
             {{ msg.content }}
@@ -546,13 +546,13 @@ onMounted(() => {
             <!-- RAG 引用来源 -->
             <div
               v-if="msg.sources && msg.sources.length"
-              class="mt-2 pt-2 border-t border-gray-100 text-xs text-gray-500"
+              class="mt-2 pt-2 border-t text-xs text-muted-foreground"
             >
               <span class="font-medium">参考来源：</span>
               <span
                 v-for="(src, i) in msg.sources"
                 :key="i"
-                class="inline-block bg-gray-100 px-1 rounded mr-1"
+                class="inline-block bg-muted px-1 rounded mr-1"
               >
                 {{ src.source ?? `来源${Number(i) + 1}` }}
               </span>
@@ -567,14 +567,14 @@ onMounted(() => {
           >
             <RobotOutlined />
           </div>
-          <div class="bg-white border border-gray-100 rounded-2xl rounded-tl-sm px-3 py-2 shadow-sm">
+          <div class="bg-card border rounded-2xl rounded-tl-sm px-3 py-2 shadow-sm">
             <span class="animate-pulse">AI 正在思考...</span>
           </div>
         </div>
       </div>
 
       <!-- 底部：配额 + 输入区 -->
-      <div class="border-t bg-white p-3 flex flex-col gap-2 shrink-0">
+      <div class="border-t bg-card p-3 flex flex-col gap-2 shrink-0">
         <!-- 配额进度条（有数据才显示） -->
         <div
           v-if="quota.daily"
