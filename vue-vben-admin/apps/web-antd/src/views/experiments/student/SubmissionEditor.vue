@@ -45,7 +45,7 @@ import { useRoute, useRouter } from 'vue-router';
 
 import {
   deleteAttachmentApi,
-  getGuidebookDownloadUrl,
+  downloadGuidebookApi,
   getSubmissionDetailApi,
   previewGuidebookApi,
   saveDraftApi,
@@ -450,7 +450,7 @@ const handlePreviewVideo = (att: any) => {
                         <div class="flex items-center gap-2 pl-7 mt-0.5">
                           <Tag size="small" :bordered="false" class="text-[10px] m-0">{{ DOC_TYPE_LABEL[gb.doc_type] ?? gb.doc_type }}</Tag>
                           <span class="text-xs text-gray-400">{{ formatFileSize(gb.file_size) }}</span>
-                          <Button size="small" type="link" class="ml-auto p-0 h-auto text-xs flex items-center gap-1" @click.stop="" :href="getGuidebookDownloadUrl(gb.id)" target="_blank">下载</Button>
+                          <Button size="small" type="link" class="ml-auto p-0 h-auto text-xs flex items-center gap-1" @click.stop="downloadGuidebookApi(gb.id, gb.file_name)">下载</Button>
                         </div>
                       </div>
                     </List.Item>

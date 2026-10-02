@@ -10,6 +10,8 @@ import type {
   SubmissionListItem,
 } from './types';
 
+import { downloadFileFromBlob } from '@vben/utils';
+
 import { requestClient } from '#/api/request';
 
 /** 
@@ -143,9 +145,13 @@ export async function previewGuidebookApi(id: number | string) {
   return extractData<GuidebookPreviewResult>(res);
 }
 
-/** 下载指导文档 URL */
-export function getGuidebookDownloadUrl(id: number | string) {
-  return `/api/v1/guidebooks/${id}/download/`;
+/** 下载指导文档并触发浏览器保存（走 requestClient 才能带上 Bearer，裸 <a href> 会 401） */
+export async function downloadGuidebookApi(id: number | string, fileName: string) {
+  const res = await requestClient.get<{ data: Blob }>(
+    `/v1/guidebooks/${id}/download/`,
+    { responseType: 'blob' },
+  );
+  downloadFileFromBlob({ fileName, source: res.data });
 }
 
 // ─────────────────────── Submission ───────────────────────

@@ -31,8 +31,8 @@ import {
 import { useRoute, useRouter } from 'vue-router';
 
 import {
+  downloadGuidebookApi,
   getExperimentDetailApi,
-  getGuidebookDownloadUrl,
   getMySubmissionApi,
   previewGuidebookApi,
 } from '#/api/experiment';
@@ -344,8 +344,7 @@ function toAbsUrl(url: string | null | undefined): string {
                       <Button
                         size="small"
                         :icon="h(DownloadOutlined)"
-                        :href="getGuidebookDownloadUrl(gb.id)"
-                        target="_blank"
+                        @click="downloadGuidebookApi(gb.id, gb.file_name)"
                       >
                         下载
                       </Button>
