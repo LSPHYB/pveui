@@ -47,6 +47,9 @@ services:
       exec daphne -b 0.0.0.0 -p 8000 django_vue_adminx.asgi:application"
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      # 上传文件（头像等），重建容器不丢
+      - media-data:/app/media
     depends_on:
       mysql:
         condition: service_healthy
@@ -65,3 +68,4 @@ services:
 
 volumes:
   mysql-data:
+  media-data:

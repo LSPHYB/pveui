@@ -38,9 +38,9 @@ urlpatterns = [
     path('api/v1/', include('apps.experiments.urls')),
 ]
 
-from django.conf.urls.static import static
-
-# 仅当定义了 MEDIA_ROOT 时才添加媒体文件映射
-if hasattr(settings, 'MEDIA_URL') and settings.MEDIA_URL:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+# 不用 static()：它在 DEBUG=False 时返回空列表，生产环境 /media/ 会全部 404
+# ponytail: 由 Django 直接出文件，量大时改成 nginx 挂载 media 目录直出
+urlpatterns += [
+    re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
+]
 
