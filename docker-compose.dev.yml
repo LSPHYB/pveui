@@ -1,0 +1,38 @@
+services:
+  # 连接外部 MySQL（homelab），不起本地库；表结构需提前手动导入 pve.sql 与 seed-menu.sql
+  # 用法：docker compose -f docker-compose.dev.yml up -d --build
+
+  # Django 后端服务
+  backend:
+    build:
+      context: ./backend
+    image: pve_backend:latest
+    container_name: django-backend
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - AUTOBAHN_USE_UVLOOP=0
+      - TWISTED_REACTOR=asyncio
+      - DB_HOST=${DB_HOST:-192.168.31.5}
+      - DB_PORT=${DB_PORT:-3306}
+    # 首次启动初始化 RBAC 菜单/权限/角色与超管（已存在时跳过，可重复执行）
+    command: >
+      sh -c "python manage.py init_rbac --create-superuser
+      --superuser-username '${ADMIN_USERNAME:-admin}'
+      --superuser-password '${ADMIN_PASSWORD:-admin123}' &&
+      exec daphne -b 0.0.0.0 -p 8000 django_vue_adminx.asgi:application"
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+
+  # Vue 前端服务
+  frontend:
+    build:
+      context: ./vue-vben-admin
+    image: vben_admin-frontend:latest
+    container_name: vben-admin-frontend
+    restart: always
+    ports:
+      - "${FRONTEND_PORT:-2208}:80"
+    depends_on:
+      - backend
